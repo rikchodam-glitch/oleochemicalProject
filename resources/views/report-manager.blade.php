@@ -16,6 +16,12 @@
                 </a>
                 <h1 class="text-xl font-black tracking-tight text-slate-900">MANAJEMEN<br><span class="text-blue-600">LAPORAN</span></h1>
                 <p class="text-xs text-slate-400 mt-1">Tahun &gt; Bulan &gt; Tanggal</p>
+                @if(request()->filled('filter_date_from') || request()->filled('filter_date_to') || request()->filled('filter_status') || request()->filled('filter_asset'))
+                <div class="mt-2 flex items-center gap-1.5 text-[11px] text-amber-700 font-medium bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-md">
+                    <span>⏳</span>
+                    <span>Filter aktif — sidebar menampilkan <strong>semua data</strong></span>
+                </div>
+                @endif
             </div>
 
             <!-- Search input untuk laporan -->

@@ -456,9 +456,15 @@ PROMPT;
     protected function decryptKey(string $encryptedKey): string
     {
         try {
-            return decrypt($encryptedKey);
+            return \Illuminate\Support\Facades\Crypt::decryptString($encryptedKey);
         } catch (\Throwable $e) {
-            return $encryptedKey;
+            // Jika gagal decrypt, coba dengan helper decrypt
+            try {
+                return decrypt($encryptedKey);
+            } catch (\Throwable $e2) {
+                // Return as-is jika memang belum terenkripsi
+                return $encryptedKey;
+            }
         }
     }
 

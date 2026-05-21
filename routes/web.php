@@ -86,8 +86,8 @@ Route::prefix('ai-providers')->name('ai-providers.')->group(function () {
     Route::get('/', [AiProviderController::class, 'index'])->name('index');
     Route::post('/', [AiProviderController::class, 'store'])->name('store');
     Route::post('{id}/update', [AiProviderController::class, 'update'])->name('update');
-    Route::get('{id}/delete', [AiProviderController::class, 'destroy'])->name('destroy');
-    Route::get('{id}/test', [AiProviderController::class, 'testConnection'])->name('test');
+    Route::post('{id}/delete', [AiProviderController::class, 'destroy'])->name('destroy');
+    Route::post('{id}/test', [AiProviderController::class, 'testConnection'])->name('test');
     Route::post('test-all', [AiProviderController::class, 'testAllConnections'])->name('test-all');
     Route::post('reset-quota', [AiProviderController::class, 'resetMonthlyQuota'])->name('reset-quota');
     Route::post('clean-logs', [AiProviderController::class, 'cleanUsageLogs'])->name('clean-logs');
