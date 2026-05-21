@@ -5,6 +5,7 @@ use App\Http\Controllers\AssetController;
 use App\Http\Controllers\EmployeeController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\MaintenanceReportController;
+use App\Http\Controllers\AiProviderController;
 
 // Route Halaman Dashboard Utama (Menu)
 Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
@@ -37,6 +38,9 @@ Route::post('/maintenance-reports', [MaintenanceReportController::class, 'store'
 Route::post('/maintenance-reports/{id}', [MaintenanceReportController::class, 'update'])->name('maintenance-reports.update');
 Route::delete('/maintenance-reports/{id}', [MaintenanceReportController::class, 'destroy'])->name('maintenance-reports.destroy');
 Route::get('/maintenance-reports/{id}/edit', [MaintenanceReportController::class, 'edit'])->name('maintenance-reports.edit');
+
+// AI Analyze Report API (real-time saat input)
+Route::post('/api/ai/analyze-report', [AiProviderController::class, 'analyzeReport'])->name('ai.analyze-report');
 
 // Route Manajemen Karyawan
 Route::get('/employees', [EmployeeController::class, 'index'])->name('employees.index');
@@ -74,5 +78,19 @@ Route::delete('/telegram-control/log/{logId}', [App\Http\Controllers\TelegramCon
     ->name('telegram.delete-log');
 Route::post('/telegram-control/clean-logs', [App\Http\Controllers\TelegramControlPanelController::class, 'cleanLogs'])
     ->name('telegram.clean-logs');
+Route::post('/telegram-control/test-connection', [App\Http\Controllers\TelegramControlPanelController::class, 'testBotConnection'])
+    ->name('telegram.test-connection');
 
-
+// AI Providers Panel
+Route::prefix('ai-providers')->name('ai-providers.')->group(function () {
+    Route::get('/', [AiProviderController::class, 'index'])->name('index');
+    Route::post('/', [AiProviderController::class, 'store'])->name('store');
+    Route::post('{id}/update', [AiProviderController::class, 'update'])->name('update');
+    Route::get('{id}/delete', [AiProviderController::class, 'destroy'])->name('destroy');
+    Route::get('{id}/test', [AiProviderController::class, 'testConnection'])->name('test');
+    Route::post('test-all', [AiProviderController::class, 'testAllConnections'])->name('test-all');
+    Route::post('reset-quota', [AiProviderController::class, 'resetMonthlyQuota'])->name('reset-quota');
+    Route::post('clean-logs', [AiProviderController::class, 'cleanUsageLogs'])->name('clean-logs');
+    Route::post('confirm-alias/{id}', [AiProviderController::class, 'confirmAlias'])->name('confirm-alias');
+    Route::post('reject-alias/{id}', [AiProviderController::class, 'rejectAlias'])->name('reject-alias');
+});

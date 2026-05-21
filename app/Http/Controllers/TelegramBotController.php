@@ -7,6 +7,7 @@ use App\Models\MaintenanceReport;
 use App\Models\TelegramBlacklist;
 use App\Models\TelegramBotLog;
 use App\Models\TelegramSetting;
+use App\Services\AI\AiGatewayService;
 use App\Services\Telegram\TelegramPhotoHandler;
 use App\Services\Telegram\TelegramReportParser;
 use App\Services\Telegram\TelegramService;
@@ -262,9 +263,88 @@ class TelegramBotController extends Controller
 
         DB::beginTransaction();
         try {
+            // 🔥 PANGGIL AI UNTUK MAPPING ASSET
+            $aiEnabled = true;
+            $aiResult = null;
+
+            try {
+                $gateway = new AiGatewayService();
+                $gateway->withContext($employee);
+
+                // Siapkan parsed items untuk AI
+                $aiItems = [];
+                foreach ($parsed['items'] as $item) {
+                    $aiItems[] = ['action' => $item['action'], 'status' => $item['status']];
+                }
+
+                $aiResult = $gateway->analyzeReport(
+                    $parsed['raw_text'],
+                    $aiItems,
+                    $employee,
+                    $parsed['shift'],
+                    $parsed['date']
+                );
+            } catch (\Throwable $e) {
+                Log::warning("AI gagal untuk laporan Telegram: {$e->getMessage()}");
+                $aiResult = null;
+            }
+
             foreach ($parsed['items'] as $index => $item) {
-                // Cari equipment yang match
-                $asset = $this->parser->matchEquipment($item['action']);
+                // Cari equipment yang match — prioritaskan AI
+                $asset = null;
+                $aiConfidence = null;
+                $aiSuggested = false;
+                $needsReview = false;
+                $aiProvider = null;
+
+                // Default ai_notes per item
+                $itemAiNotes = null;
+
+                if ($aiResult && isset($aiResult['items'][$index])) {
+                    $aiItem = $aiResult['items'][$index];
+                    $aiProvider = $aiResult['provider_used'] ?? null;
+                    $itemAiNotes = $aiItem['notes'] ?? ($aiResult['ai_notes'] ?? null);
+
+                    if ($aiItem['suggested_asset_id'] && $aiItem['confidence'] >= 0.8) {
+                        $asset = \App\Models\Asset::find($aiItem['suggested_asset_id']);
+                        $aiConfidence = $aiItem['confidence'];
+                        $aiSuggested = true;
+                        $needsReview = $aiItem['confidence'] < 0.8;
+
+                        // Simpan alias baru
+                        if (isset($aiResult['new_aliases'])) {
+                            foreach ($aiResult['new_aliases'] as $alias) {
+                                try {
+                                    \App\Models\AssetAlias::updateOrCreate(
+                                        [
+                                            'asset_id' => $alias['asset_id'],
+                                            'alias' => $alias['text'],
+                                            'employee_id' => $employee->id,
+                                        ],
+                                        [
+                                            'confidence_score' => $alias['confidence'] * 100,
+                                            'auto_generated' => true,
+                                        ]
+                                    );
+                                } catch (\Throwable $e) {
+                                    // skip jika gagal
+                                }
+                            }
+                        }
+                    } else {
+                        // Fallback ke parser biasa
+                        $asset = $this->parser->matchEquipment($item['action']);
+                        if ($aiItem['suggested_asset_id']) {
+                            $aiSuggested = true;
+                            $aiConfidence = $aiItem['confidence'];
+                            $needsReview = true;
+                        }
+                    }
+                } else {
+                    // AI tidak tersedia, fallback ke parser biasa
+                    $asset = $this->parser->matchEquipment($item['action']);
+                    $itemAiNotes = $aiResult['ai_notes'] ?? 'AI tidak tersedia untuk mapping';
+                }
 
                 // Generate unique telegram_report_id
                 $telegramReportId = 'LMS-' . $dateStr . '-' . str_pad($nextSeq, 3, '0', STR_PAD_LEFT);
@@ -288,6 +368,12 @@ class TelegramBotController extends Controller
                     'shift' => $parsed['shift'],
                     'source' => 'telegram',
                     'telegram_report_id' => $telegramReportId,
+                    'ai_confidence' => $aiConfidence,
+                    'ai_suggested' => $aiSuggested,
+                    'needs_admin_review' => $needsReview,
+                    'ai_provider_used' => $aiProvider,
+                    'ai_notes' => $itemAiNotes,
+                    'ai_fallback_reason' => $aiResult['fallback_reason'] ?? null,
                 ]);
 
                 $reportIds[] = $report;
@@ -319,9 +405,14 @@ class TelegramBotController extends Controller
             };
 
             $assetName = $report->asset ? $report->asset->tech_ident_no : '⚠️ (tidak dikenal)';
+            $suffix = '';
+            if ($report->ai_suggested) {
+                $pct = round(($report->ai_confidence ?? 0) * 100);
+                $suffix = " 🤖{$pct}%";
+            }
             $response .= "{$statusEmoji} <b>{$report->telegram_report_id}</b>\n";
             $response .= "   └ {$report->action_taken}\n";
-            $response .= "   └ Alat: {$assetName} [{$report->status}]\n\n";
+            $response .= "   └ Alat: {$assetName}{$suffix} [{$report->status}]\n\n";
         }
 
         $unknownCount = collect($reportIds)->filter(fn($r) => !$r->asset_id)->count();

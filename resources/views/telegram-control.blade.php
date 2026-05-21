@@ -111,6 +111,26 @@
                 <form action="{{ route('telegram.settings') }}" method="POST" class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     @csrf
 
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            🤖 Token Bot
+                            @if($tokenStatus == 'valid')
+                                <span class="text-green-600 text-xs font-bold ml-2">✅ Terkoneksi — {{ $botName }} </span>
+                            @else
+                                <span class="text-red-600 text-xs font-bold ml-2">❌ Token tidak valid atau belum diisi</span>
+                            @endif
+                        </label>
+                        <div class="flex gap-2">
+                            <input type="password" name="bot_token" value="{{ $botToken }}"
+                                placeholder="Isi token dari BotFather: 1234567890:ABCdef..."
+                                class="flex-1 border-gray-300 rounded-lg p-2 border text-sm font-mono">
+                            <button type="button" onclick="toggleTokenVisibility()" class="bg-slate-100 px-3 rounded-lg text-sm hover:bg-slate-200">👁️</button>
+                        </div>
+                        <p class="text-[10px] text-slate-400 mt-1">
+                            Dapatkan token dari <a href="https://t.me/BotFather" target="_blank" class="text-blue-600 underline">@BotFather</a> di Telegram
+                        </p>
+                    </div>
+
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Status Bot</label>
                         <select name="bot_status" class="w-full border-gray-300 rounded-lg p-2 border">
@@ -163,8 +183,12 @@
                         <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-blue-700">
                             💾 Simpan Pengaturan
                         </button>
-                        <a href="{{ route('telegram.set-webhook') }}" onclick="event.preventDefault(); document.getElementById('setWebhookForm').submit();"
+                        <a href="{{ route('telegram.test-connection') }}" onclick="event.preventDefault(); document.getElementById('testConnectionForm').submit();"
                             class="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-emerald-700">
+                            🔌 Test Koneksi
+                        </a>
+                        <a href="{{ route('telegram.set-webhook') }}" onclick="event.preventDefault(); document.getElementById('setWebhookForm').submit();"
+                            class="bg-cyan-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-cyan-700">
                             🔄 Set Webhook
                         </a>
                         <a href="{{ route('telegram.delete-webhook') }}" onclick="event.preventDefault(); document.getElementById('deleteWebhookForm').submit();"
@@ -177,6 +201,9 @@
                 <form id="setWebhookForm" action="{{ route('telegram.set-webhook') }}" method="POST" class="hidden">
                     @csrf
                     <input type="hidden" name="url" value="{{ \App\Models\TelegramSetting::getValue('webhook_url') }}">
+                </form>
+                <form id="testConnectionForm" action="{{ route('telegram.test-connection') }}" method="POST" class="hidden">
+                    @csrf
                 </form>
                 <form id="deleteWebhookForm" action="{{ route('telegram.delete-webhook') }}" method="POST" class="hidden">
                     @csrf
@@ -544,6 +571,16 @@
                 }
             }).catch(() => {});
         }, 30000);
+
+        // Toggle token visibility
+        let tokenVisible = false;
+        function toggleTokenVisibility() {
+            const input = document.querySelector('input[name="bot_token"]');
+            if (input) {
+                tokenVisible = !tokenVisible;
+                input.type = tokenVisible ? 'text' : 'password';
+            }
+        }
     </script>
 
 </body>

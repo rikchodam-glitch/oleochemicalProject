@@ -72,9 +72,9 @@
                 <div>
                     <h2 class="text-2xl font-bold">📋 Semua Laporan Perbaikan</h2>
                     <p class="text-slate-500 italic text-sm">
-                        Total: <strong id="total_count">{{ collect($reports)->flatten(3)->count() }}</strong> laporan
+                        Total: <strong id="total_count">{{ $reportsPaginated->total() }}</strong> laporan
                         @if(count($reports) > 0)
-                            · Tahun terbaru: <strong>{{ array_key_first($reports->toArray()) }}</strong>
+                            · Halaman {{ $reportsPaginated->currentPage() }} dari {{ $reportsPaginated->lastPage() }}
                         @endif
                     </p>
                 </div>
@@ -99,6 +99,46 @@
                 </span>
             </div>
 
+            <!-- FILTER PANEL -->
+            <div class="mb-4 bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+                <form action="{{ url()->current() }}" method="GET" class="flex flex-wrap gap-3 items-end">
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Dari Tanggal</label>
+                        <input type="date" name="filter_date_from" value="{{ request('filter_date_from') }}"
+                            class="border border-slate-200 rounded-lg p-2 text-xs focus:ring-blue-500 focus:border-blue-500 outline-none w-36">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Sampai Tanggal</label>
+                        <input type="date" name="filter_date_to" value="{{ request('filter_date_to') }}"
+                            class="border border-slate-200 rounded-lg p-2 text-xs focus:ring-blue-500 focus:border-blue-500 outline-none w-36">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Status</label>
+                        <select name="filter_status" class="border border-slate-200 rounded-lg p-2 text-xs focus:ring-blue-500 focus:border-blue-500 outline-none">
+                            <option value="">Semua Status</option>
+                            <option value="done" {{ request('filter_status') == 'done' ? 'selected' : '' }}>✅ Done</option>
+                            <option value="continue" {{ request('filter_status') == 'continue' ? 'selected' : '' }}>🔄 Continue</option>
+                            <option value="pending" {{ request('filter_status') == 'pending' ? 'selected' : '' }}>⏳ Pending</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Alat (Asset)</label>
+                        <select name="filter_asset" class="border border-slate-200 rounded-lg p-2 text-xs focus:ring-blue-500 focus:border-blue-500 outline-none min-w-[180px]">
+                            <option value="">Semua Alat</option>
+                            @foreach($allAssets as $ast)
+                                <option value="{{ $ast->id }}" {{ request('filter_asset') == $ast->id ? 'selected' : '' }}>{{ $ast->tech_ident_no }} - {{ Str::limit($ast->description, 30) }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="flex gap-2">
+                        <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors">🔍 Filter</button>
+                        @if(request()->anyFilled(['filter_date_from', 'filter_date_to', 'filter_status', 'filter_asset']))
+                            <a href="{{ url()->current() }}" class="bg-slate-200 text-slate-600 px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-300 transition-colors">✕ Hapus</a>
+                        @endif
+                    </div>
+                </form>
+            </div>
+
             <!-- Tabel Laporan -->
             <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                 <div class="overflow-x-auto">
@@ -111,6 +151,7 @@
                                 <th class="px-4 py-3">Tindakan Perbaikan</th>
                                 <th class="px-4 py-3">Shift</th>
                                 <th class="px-4 py-3">Status</th>
+                                <th class="px-4 py-3 text-center">🧠 AI</th>
                                 <th class="px-4 py-3 text-center">Dokumen</th>
                                 <th class="px-4 py-3 text-center">Aksi</th>
                             </tr>
@@ -145,6 +186,40 @@
                                     </span>
                                 </td>
                                 <td class="px-4 py-3 text-center">
+                                    @php
+                                        $hasAiData = $report->ai_provider_used || $report->ai_notes || $report->ai_suggested || $report->ai_confidence !== null;
+
+                                        // Bangun title tooltip
+                                        $aiTitle = '';
+                                        if ($report->ai_provider_used) $aiTitle .= 'Provider: ' . $report->ai_provider_used;
+                                        if ($report->ai_confidence !== null) $aiTitle .= ' | Confidence: ' . round($report->ai_confidence * 100) . '%';
+                                        if ($report->ai_notes) $aiTitle .= ' | Catatan: ' . $report->ai_notes;
+                                    @endphp
+                                    @if($report->ai_suggested && $report->ai_confidence !== null && $report->ai_confidence >= 0.8)
+                                        <span class="text-[10px] bg-green-100 text-green-700 px-2 py-1 rounded-full font-bold cursor-help"
+                                            title="{{ $aiTitle }}">
+                                            ✅
+                                        </span>
+                                    @elseif($report->ai_suggested && $report->ai_confidence !== null && $report->ai_confidence >= 0.5)
+                                        <span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-bold cursor-help"
+                                            title="{{ $aiTitle }}">
+                                            ⚠️
+                                        </span>
+                                    @elseif($report->needs_admin_review || $report->ai_suggested)
+                                        <span class="text-[10px] bg-red-100 text-red-700 px-2 py-1 rounded-full font-bold cursor-help"
+                                            title="{{ $aiTitle ?: 'Perlu review admin' }}">
+                                            ❌
+                                        </span>
+                                    @elseif($hasAiData)
+                                        <span class="text-[10px] bg-slate-100 text-slate-600 px-2 py-1 rounded-full font-bold cursor-help"
+                                            title="{{ $aiTitle }}">
+                                            🧠
+                                        </span>
+                                    @else
+                                        <span class="text-[10px] text-slate-300">-</span>
+                                    @endif
+                                </td>
+                                <td class="px-4 py-3 text-center">
                                     @php $docs = $report->documents ? json_decode($report->documents, true) : []; @endphp
                                     @if(count($docs) > 0)
                                         <button onclick="openDocModal('{{ addslashes(json_encode($docs)) }}', '{{ addslashes($report->asset->tech_ident_no ?? '') }}')" class="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200 font-bold flex items-center gap-1 mx-auto">
@@ -166,7 +241,7 @@
                             </tr>
                             @empty
                             <tr>
-                                <td colspan="8" class="p-10 text-center text-slate-400">Belum ada laporan perbaikan.</td>
+                                <td colspan="9" class="p-10 text-center text-slate-400">Belum ada laporan perbaikan.</td>
                             </tr>
                             @endforelse
                         </tbody>
@@ -175,8 +250,33 @@
             </div>
 
             <!-- Pagination Links -->
-            <div class="px-4 py-3 bg-slate-50 border-t border-slate-200">
-                {{ $reportsPaginated->links() }}
+            <div class="px-4 py-3 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                <div class="flex items-center gap-2 text-xs text-slate-500">
+                    <span>Menampilkan</span>
+                    <form action="{{ url()->current() }}" method="GET" class="inline-flex items-center gap-1">
+                        @foreach(request()->except('per_page', 'page') as $key => $value)
+                            @if($value)
+                                <input type="hidden" name="{{ $key }}" value="{{ $value }}">
+                            @endif
+                        @endforeach
+                        <select name="per_page" onchange="this.form.submit()" class="border border-slate-200 rounded p-1 text-xs font-bold text-slate-700">
+                            <option value="20" {{ (request('per_page', 50) == 20) ? 'selected' : '' }}>20</option>
+                            <option value="50" {{ (request('per_page', 50) == 50) ? 'selected' : '' }}>50</option>
+                            <option value="100" {{ (request('per_page', 50) == 100) ? 'selected' : '' }}>100</option>
+                            <option value="200" {{ (request('per_page', 50) == 200) ? 'selected' : '' }}>200</option>
+                        </select>
+                        <span>per halaman</span>
+                        <noscript><button type="submit" class="text-blue-600 ml-1">Go</button></noscript>
+                    </form>
+                    <span class="ml-2">
+                        @if($reportsPaginated->total() > 0)
+                            {{ $reportsPaginated->firstItem() }} - {{ $reportsPaginated->lastItem() }} dari {{ $reportsPaginated->total() }}
+                        @endif
+                    </span>
+                </div>
+                <div class="flex items-center">
+                    {{ $reportsPaginated->links() }}
+                </div>
             </div>
 
             <!-- Ringkasan Footer -->
@@ -250,7 +350,11 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Tindakan Perbaikan <span class="text-red-500">*</span></label>
-                        <textarea name="action_taken" rows="3" required class="w-full border-gray-300 rounded p-2 border focus:ring-blue-500 focus:border-blue-500" placeholder="Deskripsi tindakan perbaikan..."></textarea>
+                        <textarea name="action_taken" rows="3" required class="w-full border-gray-300 rounded p-2 border focus:ring-blue-500 focus:border-blue-500"
+                            oninput="onActionInput(this, 'create')"
+                            placeholder="Deskripsi tindakan perbaikan... Misal: Pompa 1 bocor, ganti mechanical seal"></textarea>
+                        <!-- AI Analysis Panel -->
+                        <div id="ai_panel_create" class="hidden mt-2"></div>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">📎 Dokumentasi (foto)</label>
@@ -338,7 +442,10 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Tindakan Perbaikan <span class="text-red-500">*</span></label>
-                        <textarea name="action_taken" id="edit_action_taken" rows="3" required class="w-full border-gray-300 rounded p-2 border focus:ring-blue-500 focus:border-blue-500"></textarea>
+                        <textarea name="action_taken" id="edit_action_taken" rows="3" required class="w-full border-gray-300 rounded p-2 border focus:ring-blue-500 focus:border-blue-500"
+                            oninput="onActionInput(this, 'edit')"></textarea>
+                        <!-- AI Analysis Panel -->
+                        <div id="ai_panel_edit" class="hidden mt-2"></div>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">📎 Dokumentasi</label>
@@ -529,65 +636,46 @@
         let activeDate = null;
 
         function filterByDate(date) {
-            activeDate = date;
-            const rows = document.querySelectorAll('.report-row');
-            let visibleCount = 0;
-            rows.forEach(row => {
-                const match = row.dataset.date === date;
-                row.style.display = match ? '' : 'none';
-                if (match) visibleCount++;
-            });
-
-            // Tampilkan badge filter
-            const badge = document.getElementById('filter_badge');
-            const label = document.getElementById('filter_label');
-            const totalSpan = document.getElementById('total_count');
-
-            if (date) {
-                badge.classList.remove('hidden');
-                badge.classList.add('flex');
-                label.textContent = date;
-                totalSpan.textContent = visibleCount;
-            }
-
-            // Highlight tombol tanggal yang aktif
-            document.querySelectorAll('.date-btn').forEach(btn => {
-                btn.classList.toggle('bg-blue-100', btn.dataset.date === date);
-                btn.classList.toggle('text-blue-700', btn.dataset.date === date);
-                btn.classList.toggle('font-bold', btn.dataset.date === date);
-                btn.classList.toggle('hover:bg-blue-50', btn.dataset.date !== date);
-            });
+            // Redirect ke halaman dengan filter tanggal
+            const url = new URL(window.location.href);
+            url.searchParams.set('filter_date_from', date);
+            url.searchParams.set('filter_date_to', date);
+            url.searchParams.delete('page');
+            window.location.href = url.toString();
         }
 
         function clearFilter() {
-            activeDate = null;
-            const rows = document.querySelectorAll('.report-row');
-            rows.forEach(row => row.style.display = '');
-            document.getElementById('filter_badge').classList.add('hidden');
-            document.getElementById('filter_badge').classList.remove('flex');
-            document.getElementById('total_count').textContent = rows.length;
-            document.querySelectorAll('.date-btn').forEach(btn => {
-                btn.classList.remove('bg-blue-100', 'text-blue-700', 'font-bold');
-                btn.classList.add('hover:bg-blue-50');
-            });
+            const url = new URL(window.location.href);
+            url.searchParams.delete('filter_date_from');
+            url.searchParams.delete('filter_date_to');
+            url.searchParams.delete('filter_status');
+            url.searchParams.delete('filter_asset');
+            url.searchParams.delete('page');
+            window.location.href = url.toString();
         }
 
-        // === SEARCH LAPORAN ===
-        function filterReports(val) {
-            const q = val.toLowerCase().trim();
-            const rows = document.querySelectorAll('.report-row');
-            let totalVisible = 0;
+        // === SEARCH LAPORAN (sidebar quick search) ===
+        let searchTimeout = null;
 
-            // Cari di kolom: tanggal, alat, teknisi, tindakan, shift, status
-            rows.forEach(row => {
-                const cells = row.querySelectorAll('td');
-                const text = Array.from(cells).slice(0, 6).map(c => c.textContent.toLowerCase()).join(' ');
-                const match = q === '' || text.includes(q);
-                row.style.display = match ? '' : 'none';
-                if (match) totalVisible++;
-            });
+        function filterReports(val) {
+            // Search menggunakan filter client-side karena tidak ada parameter search di URL
+            // Tapi kita bisa highlight sidebar
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                const q = val.toLowerCase().trim();
+                const rows = document.querySelectorAll('.report-row');
+                let totalVisible = 0;
+
+                rows.forEach(row => {
+                    const cells = row.querySelectorAll('td');
+                    const text = Array.from(cells).slice(0, 6).map(c => c.textContent.toLowerCase()).join(' ');
+                    const match = q === '' || text.includes(q);
+                    row.style.display = match ? '' : 'none';
+                    if (match) totalVisible++;
+                });
 
             document.getElementById('total_count').textContent = totalVisible;
+            }, 300);
         }
 
         // === MODAL VIEW DOKUMENTASI ===
@@ -628,6 +716,161 @@
         function closeDocModal() {
             document.getElementById('docViewModal').classList.add('hidden');
             document.getElementById('docViewModal').classList.remove('flex');
+        }
+
+        // =============================================
+        // === AI REAL-TIME ANALYSIS ===
+        // =============================================
+        let aiDebounceTimers = {};
+
+        function onActionInput(inputEl, modalType) {
+            clearTimeout(aiDebounceTimers[modalType]);
+            aiDebounceTimers[modalType] = setTimeout(() => {
+                analyzeWithAI(inputEl.value, modalType);
+            }, 1200);
+        }
+
+        async function analyzeWithAI(text, modalType) {
+            if (!text || text.trim().length < 5) {
+                hideAiPanel(modalType);
+                return;
+            }
+
+            const employeeSelect = document.getElementById(modalType === 'create' ? 'create_employee_id' : 'edit_employee_id');
+            const employeeId = employeeSelect?.value;
+            const shiftEl = document.getElementById(modalType === 'create' ? '' : 'edit_shift');
+            const shift = shiftEl?.value || '1';
+            const dateEl = document.getElementById(modalType === 'create' ? '' : 'edit_report_date');
+            const date = dateEl?.value || new Date().toISOString().split('T')[0];
+
+            if (!employeeId) {
+                showAiPanel(modalType, 'warning', '⚠️ Pilih teknisi dulu agar AI bisa menganalisa');
+                return;
+            }
+
+            showAiPanel(modalType, 'loading', '🧠 AI sedang menganalisa laporan...');
+
+            try {
+                const res = await fetch('{{ route("ai.analyze-report") }}', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                    },
+                    body: JSON.stringify({
+                        raw_text: text,
+                        employee_id: parseInt(employeeId),
+                        shift: shift,
+                        report_date: date
+                    })
+                });
+
+                const result = await res.json();
+
+                if (result.success) {
+                    const suggestions = result.items || [];
+                    const warnings = result.warnings || [];
+                    const unknowns = result.unknown_assets || [];
+                    const newAliases = result.new_aliases || [];
+
+                    let html = '';
+
+                    // Summary
+                    if (result.summary) {
+                        html += `<div class="text-sm font-bold text-slate-700 mb-2">📋 ${result.summary}</div>`;
+                    }
+
+                    // Warnings
+                    for (const w of warnings) {
+                        const icon = w.includes('tidak ditemukan') ? '❌' : w.includes('mirip') ? '⚠️' : '💡';
+                        html += `<div class="flex items-start gap-2 text-xs p-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 mb-1">
+                            <span>${icon}</span>
+                            <span>${w}</span>
+                        </div>`;
+                    }
+
+                    // Unknown assets
+                    for (const u of unknowns) {
+                        html += `<div class="flex items-start gap-2 text-xs p-2 rounded-lg bg-red-50 border border-red-200 text-red-700 mb-1">
+                            <span>❓</span>
+                            <div>
+                                <span class="font-bold">"${u.text || u}"</span>
+                                ${u.reason ? `<br><span class="text-red-500">${u.reason}</span>` : ''}
+                            </div>
+                        </div>`;
+                    }
+
+                    // Suggested asset
+                    if (suggestions.length > 0 && suggestions[0].suggested_asset_id) {
+                        const item = suggestions[0];
+                        const conf = Math.round((item.confidence || 0) * 100);
+                        const color = conf >= 80 ? 'green' : (conf >= 50 ? 'amber' : 'red');
+
+                        html += `<div class="flex items-center justify-between p-2 rounded-lg bg-${color}-50 border border-${color}-200 mt-1">
+                            <div class="flex items-center gap-2">
+                                <span>${conf >= 80 ? '✅' : '💡'}</span>
+                                <div>
+                                    <span class="text-xs font-bold text-slate-700">Saran AI:</span>
+                                    <span class="text-xs text-blue-600 font-bold ml-1">${item.suggested_tech_ident_no || 'ID #' + item.suggested_asset_id}</span>
+                                    <span class="text-xs text-slate-400 ml-2">confidence: ${conf}%</span>
+                                </div>
+                            </div>
+                            <button onclick="applyAiSuggestion('${modalType}', ${item.suggested_asset_id})"
+                                class="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded font-bold hover:bg-blue-200">
+                                Pakai
+                            </button>
+                        </div>`;
+                    }
+
+                    // New aliases info
+                    if (newAliases.length > 0) {
+                        html += `<div class="text-[10px] text-slate-400 mt-1">🧠 Mempelajari ${newAliases.length} alias baru dari teks ini</div>`;
+                    }
+
+                    if (!html) {
+                        html = '<div class="text-xs text-green-600 p-2 bg-green-50 rounded-lg border border-green-200">✅ AI mengenali semua item dalam laporan ini</div>';
+                    }
+
+                    showAiPanel(modalType, 'result', html);
+                } else {
+                    showAiPanel(modalType, 'warning', '⚠️ ' + (result.error || 'AI tidak bisa menganalisa'));
+                }
+            } catch (e) {
+                showAiPanel(modalType, 'error', '❌ Gagal: ' + e.message);
+            }
+        }
+
+        function showAiPanel(modalType, type, content) {
+            const panel = document.getElementById('ai_panel_' + modalType);
+            if (!panel) return;
+            panel.classList.remove('hidden');
+
+            if (type === 'loading') {
+                panel.innerHTML = `<div class="flex items-center gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200">
+                    <div class="animate-spin w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+                    <span class="text-xs text-blue-700">${content}</span>
+                </div>`;
+            } else if (type === 'warning' || type === 'error') {
+                const bg = type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-amber-50 border-amber-200 text-amber-800';
+                panel.innerHTML = `<div class="p-3 rounded-lg ${bg} border text-sm">${content}</div>`;
+            } else if (type === 'result') {
+                panel.innerHTML = `<div class="p-3 rounded-lg bg-slate-50 border border-slate-200">${content}</div>`;
+            }
+        }
+
+        function hideAiPanel(modalType) {
+            const panel = document.getElementById('ai_panel_' + modalType);
+            if (panel) panel.classList.add('hidden');
+        }
+
+        function applyAiSuggestion(modalType, assetId) {
+            const container = document.getElementById(modalType === 'create' ? 'create_asset_container' : 'edit_asset_container');
+            if (!container) return;
+            const radio = container.querySelector('input[type="radio"][value="' + assetId + '"]');
+            if (radio) {
+                radio.checked = true;
+                radio.closest('.asset-item')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
         }
     </script>
 </body>

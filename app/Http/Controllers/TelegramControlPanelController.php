@@ -29,6 +29,13 @@ class TelegramControlPanelController extends Controller
         $webhookInfo = $this->telegram->getWebhookInfo();
         $botStatus = TelegramSetting::getValue('bot_status', 'active');
 
+        // Ambil info bot dari Telegram API
+        $botInfo = $this->getBotInfo();
+        $botName = $botInfo['result']['first_name'] ?? 'Unknown Bot';
+        $botUsername = $botInfo['result']['username'] ?? 'unknown_bot';
+        $botToken = TelegramSetting::getValue('bot_token');
+        $tokenStatus = !empty($botToken) && isset($botInfo['ok']) && $botInfo['ok'] ? 'valid' : 'invalid';
+
         // Statistik
         $totalRegistered = Employee::whereNotNull('telegram_id')->count();
         $totalUnregistered = Employee::whereNull('telegram_id')->count();
@@ -76,6 +83,11 @@ class TelegramControlPanelController extends Controller
 
         return view('telegram-control', compact(
             'botActive',
+            'botInfo',
+            'botName',
+            'botUsername',
+            'botToken',
+            'tokenStatus',
             'webhookInfo',
             'botStatus',
             'totalRegistered',
@@ -99,6 +111,7 @@ class TelegramControlPanelController extends Controller
     public function updateSettings(Request $request)
     {
         $request->validate([
+            'bot_token' => 'nullable|string',
             'bot_status' => 'in:active,inactive,maintenance',
             'auto_approve' => 'in:true,false',
             'max_items_per_report' => 'integer|min:1|max:100',
@@ -106,7 +119,14 @@ class TelegramControlPanelController extends Controller
             'webhook_url' => 'nullable|url',
         ]);
 
-        foreach ($request->except('_token') as $key => $value) {
+        // Update bot token jika diisi
+        if ($request->filled('bot_token')) {
+            TelegramSetting::setValue('bot_token', $request->bot_token);
+            // Re-inisialisasi service dengan token baru
+            $this->telegram = new TelegramService();
+        }
+
+        foreach ($request->except(['_token', 'bot_token']) as $key => $value) {
             TelegramSetting::setValue($key, $value);
         }
 
@@ -116,6 +136,36 @@ class TelegramControlPanelController extends Controller
         }
 
         return redirect()->back()->with('success', 'Pengaturan berhasil diperbarui!');
+    }
+
+    /**
+     * Test koneksi bot dan dapatkan info
+     */
+    public function testBotConnection()
+    {
+        $token = TelegramSetting::getValue('bot_token');
+        if (empty($token)) {
+            return redirect()->back()->with('error', 'Token bot belum diisi!');
+        }
+
+        try {
+            $response = \Illuminate\Support\Facades\Http::timeout(10)
+                ->get("https://api.telegram.org/bot{$token}/getMe");
+
+            $result = $response->json();
+
+            if ($result['ok'] ?? false) {
+                $bot = $result['result'];
+                return redirect()->back()->with('success',
+                    "✅ Bot terhubung! Nama: <b>{$bot['first_name']}</b> (@{$bot['username']})"
+                );
+            }
+
+            return redirect()->back()->with('error', "❌ Token tidak valid: {$result['description']}");
+
+        } catch (\Throwable $e) {
+            return redirect()->back()->with('error', "❌ Gagal terhubung ke Telegram: {$e->getMessage()}");
+        }
     }
 
     /**
@@ -264,6 +314,24 @@ class TelegramControlPanelController extends Controller
             return redirect()->back()->with('info', "Tidak ada log untuk dihapus.");
         } catch (\Throwable $e) {
             return redirect()->back()->with('error', "Gagal menghapus log: {$e->getMessage()}");
+        }
+    }
+
+    /**
+     * Ambil info bot dari API Telegram
+     */
+    protected function getBotInfo(): array
+    {
+        try {
+            $token = TelegramSetting::getValue('bot_token');
+            if (empty($token)) {
+                return ['ok' => false];
+            }
+            $response = \Illuminate\Support\Facades\Http::timeout(5)
+                ->get("https://api.telegram.org/bot{$token}/getMe");
+            return $response->json() ?? ['ok' => false];
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'error' => $e->getMessage()];
         }
     }
 }

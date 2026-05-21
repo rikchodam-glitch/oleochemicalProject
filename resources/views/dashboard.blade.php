@@ -135,6 +135,13 @@
                             <p class="text-xs text-slate-400">Panel Kontrol &amp; Monitoring Bot</p>
                         </div>
                     </a>
+                    <a href="{{ route('ai-providers.index') }}" class="flex items-center gap-4 p-3 rounded-xl hover:bg-indigo-50 transition-colors border border-transparent hover:border-indigo-100">
+                        <div class="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-lg flex items-center justify-center text-lg">🧠</div>
+                        <div>
+                            <p class="text-sm font-bold text-slate-700">Panel AI Providers</p>
+                            <p class="text-xs text-slate-400">Groq, OpenAI &amp; Fallback Chain</p>
+                        </div>
+                    </a>
                 </div>
             </div>
 
