@@ -37,7 +37,13 @@ class TelegramBotController extends Controller
     {
         $update = $request->all();
         $message = $update['message'] ?? null;
+        $callbackQuery = $update['callback_query'] ?? null;
         $updateId = $update['update_id'] ?? null;
+
+        // 🔥 HANDLE CALLBACK QUERY (tombol inline ditekan)
+        if ($callbackQuery) {
+            return $this->handleCallbackQuery($callbackQuery);
+        }
 
         if (!$message) {
             return response()->json(['status' => 'ok']);
@@ -122,6 +128,131 @@ class TelegramBotController extends Controller
                 'chat_id' => $chatId,
                 'log_id' => $log->id,
             ]);
+        }
+
+        return response()->json(['status' => 'ok']);
+    }
+
+    /**
+     * Handle callback query — user menekan tombol inline keyboard
+     */
+    protected function handleCallbackQuery(array $callbackQuery): \Illuminate\Http\JsonResponse
+    {
+        $callbackId = $callbackQuery['id'] ?? '';
+        $chatId = $callbackQuery['message']['chat']['id'] ?? 0;
+        $messageId = $callbackQuery['message']['message_id'] ?? 0;
+        $data = $callbackQuery['data'] ?? '';
+        $fromId = $callbackQuery['from']['id'] ?? 0;
+
+        // Parse callback data: prefix:session_id:value
+        $parts = explode(':', $data);
+        $action = $parts[0] ?? '';
+        $sessionId = $parts[1] ?? '';
+        $value = $parts[2] ?? '';
+
+        // Cari session
+        $session = \App\Services\AI\ClarificationSessionManager::getSession($sessionId);
+        if (!$session) {
+            $this->telegram->answerCallbackQuery($callbackId, 'Sesi telah kadaluarsa', true);
+            return response()->json(['status' => 'expired']);
+        }
+
+        // Cari employee dari chatId
+        $employee = Employee::where('telegram_id', $chatId)->first();
+
+        switch ($action) {
+            case 'clarify_select':
+                // User memilih salah satu opsi
+                $this->telegram->answerCallbackQuery($callbackId, "Memilih opsi {$value}...");
+
+                // Proses pilihan (value = nomor opsi)
+                $result = \App\Services\AI\ClarificationSessionManager::processUserReply(
+                    $sessionId,
+                    $value // "1", "2", "3"
+                );
+
+                if (!$result['success']) {
+                    $this->telegram->editMessageText($chatId, $messageId,
+                        "❌ " . ($result['error'] ?? 'Terjadi kesalahan.')
+                    );
+                    return response()->json(['status' => 'error']);
+                }
+
+                if ($result['resolved']) {
+                    // ✅ Resolved
+                    $report = \App\Services\AI\ClarificationSessionManager::saveReportFromClarification(
+                        $result['session'],
+                        $result['asset']
+                    );
+
+                    // Update pesan asli — ganti jadi konfirmasi
+                    $asset = $result['asset'];
+                    $confirmText = "✅ <b>Laporan dikonfirmasi!</b>\n\n" .
+                        "Equipment: <b>{$asset['tech_ident_no']}</b>\n" .
+                        "Deskripsi: {$asset['description']}\n" .
+                        "Lokasi: {$asset['location']}\n\n" .
+                        "🧠 AI belajar: laporan serupa akan langsung dikenali.";
+
+                    $this->telegram->editMessageText($chatId, $messageId, $confirmText);
+
+                    // Kirim pesan tambahan
+                    $this->telegram->sendMessage($chatId,
+                        "📋 <b>Status:</b> Perbaikan selesai\n" .
+                        "Terima kasih! 🙏"
+                    );
+
+                    if ($report) {
+                        // Update log jika ada
+                        TelegramBotLog::where('telegram_chat_id', $chatId)
+                            ->latest()
+                            ->first()
+                            ?->update(['maintenance_report_id' => $report->id]);
+                    }
+
+                    \App\Services\AI\ClarificationSessionManager::destroySession($sessionId);
+
+                } elseif ($result['unidentified']) {
+                    // 3x gagal
+                    \App\Services\AI\ClarificationSessionManager::saveUnidentifiedReport($result['session']);
+
+                    $this->telegram->editMessageText($chatId, $messageId,
+                        "⚠️ <b>Laporan tidak teridentifikasi</b>\n\n" .
+                        "Setelah 3 kali percobaan, laporan diteruskan ke admin."
+                    );
+
+                    \App\Services\AI\ClarificationSessionManager::destroySession($sessionId);
+
+                } else {
+                    // Gagal, masih ada sisa
+                    $remaining = $result['remaining_attempts'] ?? 0;
+                    $this->telegram->answerCallbackQuery($callbackId, "Pilihan tidak dikenali. Sisa: {$remaining}x", true);
+
+                    // Update pesan — tampilkan sisa
+                    $optionsText = "";
+                    foreach ($session['possible_assets'] as $i => $asset) {
+                        $num = $i + 1;
+                        $optionsText .= "{$num}. {$asset['tech_ident_no']} - {$asset['description']}\n";
+                    }
+
+                    $this->telegram->editMessageText($chatId, $messageId,
+                        "⚠️ Pilihan tidak dikenali. Coba lagi:\n\n{$optionsText}\nSisa: {$remaining}x"
+                    );
+                }
+                break;
+
+            case 'clarify':
+                if ($value === 'none') {
+                    // User pilih "Tidak ada"
+                    $this->telegram->answerCallbackQuery($callbackId, 'Silakan ketik manual');
+                    $this->telegram->editMessageText($chatId, $messageId,
+                        "✍️ Silakan ketik kode equipment secara manual, atau kirim detail tambahan.\n\n" .
+                        "Sisa percobaan: " . ($session['max_attempts'] - $session['attempts']) . "x"
+                    );
+                }
+                break;
+
+            default:
+                $this->telegram->answerCallbackQuery($callbackId, 'Aksi tidak dikenal');
         }
 
         return response()->json(['status' => 'ok']);
