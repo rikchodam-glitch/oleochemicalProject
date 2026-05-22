@@ -409,6 +409,15 @@ class TelegramBotController extends Controller
             return;
         }
 
+        // Jika user mengirim format "1.A 2.C" cek juga sesi aktif (fallback)
+        if (preg_match('/^[\d\s\.\:A-Ha-h]+$/', trim($text))) {
+            $activeSession = \App\Services\AI\ClarificationSessionManager::getActiveSession((int)$chatId);
+            if ($activeSession && $activeSession['status'] === 'waiting_user') {
+                $this->processClarificationReply($text, $chatId, $employee, $log, $activeSession);
+                return;
+            }
+        }
+
         // DETEKSI JENIS: Report Rangkuman atau Harian?
         // Rangkuman: dimulai "Report shift" atau ada format "Report shift X\nDD/MM/YYYY"
         // Harian: teks biasa (1 equipment)
