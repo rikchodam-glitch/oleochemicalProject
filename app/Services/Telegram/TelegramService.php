@@ -43,6 +43,53 @@ class TelegramService
     }
 
     /**
+     * Kirim pesan dengan inline keyboard (tombol interaktif)
+     * Button format: [['text' => 'Label', 'callback_data' => 'data'], ...]
+     */
+    public function sendMessageWithKeyboard(string $chatId, string $text, array $buttons, array $extra = []): array
+    {
+        $keyboard = [
+            'inline_keyboard' => array_map(fn($b) => [$b], $buttons),
+        ];
+
+        $response = Http::post("{$this->apiBase}/sendMessage", array_merge([
+            'chat_id' => $chatId,
+            'text' => $text,
+            'parse_mode' => 'HTML',
+            'reply_markup' => json_encode($keyboard),
+        ], $extra));
+        return $response->json();
+    }
+    /**
+     * Edit pesan (update text) - untuk merespon callback query
+     */
+    public function editMessageText(string $chatId, int $messageId, string $text, array $extra = []): array
+    {
+        $response = Http::post("{$this->apiBase}/editMessageText", array_merge([
+            'chat_id' => $chatId,
+            'message_id' => $messageId,
+            'text' => $text,
+            'parse_mode' => 'HTML',
+        ], $extra));
+
+        return $response->json();
+    }
+
+    /**
+     * Jawab callback query (memberi feedback ke user yang tap tombol)
+     */
+    public function answerCallbackQuery(string $callbackQueryId, string $text = '', bool $showAlert = false): array
+    {
+        $response = Http::post("{$this->apiBase}/answerCallbackQuery", [
+            'callback_query_id' => $callbackQueryId,
+            'text' => $text,
+            'show_alert' => $showAlert,
+        ]);
+
+        return $response->json();
+    }
+
+    /**
      * Download file dari Telegram (untuk foto)
      */
     public function downloadFile(string $fileId): ?string
@@ -50,7 +97,6 @@ class TelegramService
         $response = Http::get("{$this->apiBase}/getFile", [
             'file_id' => $fileId,
         ]);
-
         $data = $response->json();
         if (!$data['ok'] ?? false) return null;
 
@@ -112,3 +158,4 @@ class TelegramService
         return ($me['ok'] ?? false) === true;
     }
 }
+
