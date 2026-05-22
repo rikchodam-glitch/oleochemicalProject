@@ -403,137 +403,40 @@ class TelegramBotController extends Controller
         }
 
         // Cek apakah user sedang dalam sesi klarifikasi
+        // Cek apakah user sedang dalam sesi klarifikasi
         $activeSession = \App\Services\AI\ClarificationSessionManager::getActiveSession((int)$chatId);
         if ($activeSession && $activeSession['status'] === 'waiting_user') {
             $this->processClarificationReply($text, $chatId, $employee, $log, $activeSession);
             return;
         }
 
-        // Jika user mengirim format "1.A 2.C" cek juga sesi aktif (fallback)
-        if (preg_match('/^[\d\s\.\:A-Ha-h]+$/', trim($text))) {
-            $activeSession = \App\Services\AI\ClarificationSessionManager::getActiveSession((int)$chatId);
-            if ($activeSession && $activeSession['status'] === 'waiting_user') {
-                $this->processClarificationReply($text, $chatId, $employee, $log, $activeSession);
-                return;
-            }
-        }
-
-        // DETEKSI JENIS: Report Rangkuman atau Harian?
-        // Rangkuman: dimulai "Report shift" atau ada format "Report shift X\nDD/MM/YYYY"
-        // Harian: teks biasa (1 equipment)
+        // DETEKSI JENIS: Report Rangkuman atau tolak?
         $isRangkuman = preg_match('/^Report\s+shift\s+\d+/i', trim($text));
 
         if ($isRangkuman) {
             $this->handleReportRangkuman($text, $chatId, $employee, $log);
         } else {
-            $this->handleReportHarian($text, $chatId, $employee, $log);
-        }
-    }
-
-    /**
-     * Report Harian — 1 equipment, shift/tanggal auto dari jam kirim
-     */
-    protected function handleReportHarian(string $text, string $chatId, Employee $employee, TelegramBotLog $log): void
-    {
-        $now = now();
-
-        // Tentukan shift berdasarkan jam
-        $hour = (int)$now->format('H');
-        $shift = match(true) {
-            $hour >= 8 && $hour < 16 => '1',
-            $hour >= 16 || $hour < 0 => '2',
-            default => '3', // malam
-        };
-        // Kalau jam 00-08, shift malam, tanggalnya mundur 1 hari? Atau tetap hari ini
-        if ($hour >= 0 && $hour < 8) {
-            $shift = 'Malam';
-        }
-
-        $date = $now;
-
-        $this->telegram->sendMessage($chatId,
-            "📋 <b>Laporan Harian</b>\n" .
-            "Shift: {$shift} | Tanggal: {$date->format('d/m/Y')}\n" .
-            "🧠 Menganalisa..."
-        );
-
-        // Parse teks sebagai 1 item
-        $parsed = [
-            'date' => $date,
-            'shift' => $shift,
-            'items' => [
-                [
-                    'action' => trim($text),
-                    'status' => 'done',
-                ]
-            ],
-            'raw_text' => $text,
-        ];
-
-        // AI mapping untuk 1 item
-        $gateway = new AiGatewayService();
-        $gateway->withContext($employee);
-
-        try {
-            $singleText = "Item 1: " . $text . " (done)";
-            $aiResult = $gateway->analyzeWithClarification($singleText, $employee);
-        } catch (\Throwable $e) {
-            Log::warning("AI Harian gagal: {$e->getMessage()}");
-            $aiResult = null;
-        }
-
-        $resolvedAsset = null;
-
-        if ($aiResult && isset($aiResult['items']) && !empty($aiResult['items'])) {
-            $aiItem = $aiResult['items'][0];
-            $conf = $aiItem['confidence'] ?? 0;
-
-            if ($conf >= 0.8 && !empty($aiItem['suggested_asset_id'])) {
-                $resolvedAsset = \App\Models\Asset::find($aiItem['suggested_asset_id']);
-            }
-        }
-
-        // Jika ada asset, langsung simpan
-        if ($resolvedAsset) {
-            $this->saveSingleReport($parsed, $resolvedAsset, $aiResult, $chatId, $employee, $log);
-        } else {
-            // Ambigu — tampilkan opsi
-            $possibleAssets = $aiResult['items'][0]['possible_assets'] ?? [];
-
-            if (!empty($possibleAssets)) {
-                // Tampilkan opsi
-                $msg = "🤖 <b>Analisa AI</b>\n\n";
-                $msg .= "1. {$text}\n";
-                $msg .= "   Pilih:\n";
-                $letters = ['A', 'B', 'C', 'D', 'E'];
-                foreach ($possibleAssets as $i => $pa) {
-                    $msg .= "   {$letters[$i]}. {$pa['tech_ident_no']} — {$pa['description']}";
-                    if (!empty($pa['location'])) $msg .= " ({$pa['location']})";
-                    $msg .= "\n";
+            // Cek format jawaban klarifikasi (1.A, 1.A 2.B)
+            if (preg_match('/^[\d\s\.\:\-]+\s*[A-Ha-h]/', trim($text))) {
+                $activeSession = \App\Services\AI\ClarificationSessionManager::getActiveSession((int)$chatId);
+                if ($activeSession && $activeSession['status'] === 'waiting_user') {
+                    $this->processClarificationReply($text, $chatId, $employee, $log, $activeSession);
+                    return;
                 }
-                $msg .= "\n📝 Balas: <code>1.A</code> untuk pilih opsi A\n";
-                $msg .= "Atau: <code>lewati</code> untuk skip";
-
-                // Buat session 1 item
-                $session = \App\Services\AI\ClarificationSessionManager::createSession(
-                    (int)$chatId, $chatId, $aiResult ?? [], $employee, $text,
-                    $parsed['items'] ?? null,
-                    [
-                        [
-                            'action' => $text,
-                            'status' => 'done',
-                            'possible_assets' => $possibleAssets,
-                            'clarification_question' => 'Pilih equipment:',
-                            'parsed_date' => $date,
-                            'parsed_shift' => $shift,
-                        ]
-                    ]
-                );
-                $this->telegram->sendMessage($chatId, $msg);
-            } else {
-                // Tidak ada opsi — simpan tanpa asset
-                $this->saveSingleReport($parsed, null, null, $chatId, $employee, $log);
             }
+
+            // Teks biasa = bukan format dikenali
+            $this->telegram->sendMessage($chatId,
+                "Format tidak dikenali.\n\n" .
+                "Untuk laporan HARIAN:\n" .
+                "Kirim FOTO + caption keterangan pekerjaan.\n\n" .
+                "Untuk laporan RANGKUMAN:\n" .
+                "Gunakan format:\n" .
+                "Report shift 1\n" .
+                "DD/MM/YYYY\n" .
+                "1. Aksi perbaikan - done\n" .
+                "2. Aksi lain (continue)"
+            );
         }
     }
 
@@ -595,7 +498,95 @@ class TelegramBotController extends Controller
 
         $this->telegram->sendMessage($chatId, $response);
     }
+    protected function handleReportHarianFromPhoto(array $message, string $caption, string $chatId, Employee $employee, TelegramBotLog $log): void
+{
+    $now = now();
+    $hour = (int)$now->format('H');
+    $shift = match(true) {
+        $hour >= 8 && $hour < 16 => '1',
+        $hour >= 16 || $hour < 0 => '2',
+        default => 'Malam',
+    };
+    $date = $now;
 
+    $this->telegram->sendMessage($chatId,
+        "Laporan Harian (dari foto)\n" .
+        "Shift: {$shift} | {$date->format('d/m/Y')}\n" .
+        "Caption: {$caption}\n" .
+        "Menganalisa..."
+    );
+
+    $gateway = new AiGatewayService();
+    $gateway->withContext($employee);
+
+    try {
+        $singleText = "Item 1: " . $caption . " (done)";
+        $aiResult = $gateway->analyzeWithClarification($singleText, $employee);
+    } catch (\Throwable $e) {
+        Log::warning("AI Harian (foto) gagal: {$e->getMessage()}");
+        $aiResult = null;
+    }
+
+    $resolvedAsset = null;
+    $aiItem = null;
+
+    if ($aiResult && isset($aiResult['items']) && !empty($aiResult['items'])) {
+        $aiItem = $aiResult['items'][0];
+        $conf = $aiItem['confidence'] ?? 0;
+        if ($conf >= 0.8 && !empty($aiItem['suggested_asset_id'])) {
+            $resolvedAsset = \App\Models\Asset::find($aiItem['suggested_asset_id']);
+        }
+    }
+
+    $dateStr = $date->format('Ymd');
+    $lastSeq = MaintenanceReport::where('telegram_report_id', 'LIKE', "LMS-{$dateStr}-%")
+        ->orderBy('telegram_report_id', 'desc')
+        ->value('telegram_report_id');
+    $nextSeq = 1;
+    if ($lastSeq && preg_match('/-(\d{3})$/', $lastSeq, $m)) {
+        $nextSeq = (int)$m[1] + 1;
+    }
+    $telegramReportId = 'LMS-' . $dateStr . '-' . str_pad($nextSeq, 3, '0', STR_PAD_LEFT);
+
+    DB::beginTransaction();
+    try {
+        $report = MaintenanceReport::create([
+            'asset_id' => $resolvedAsset ? $resolvedAsset->id : null,
+            'employee_id' => $employee->id,
+            'raw_text' => $caption,
+            'action_taken' => $caption,
+            'status' => 'done',
+            'report_date' => $date,
+            'shift' => $shift,
+            'source' => 'telegram',
+            'telegram_report_id' => $telegramReportId,
+            'ai_confidence' => $aiItem['confidence'] ?? null,
+            'ai_suggested' => $resolvedAsset !== null,
+        ]);
+
+        // Attach foto langsung
+        $photoPath = $this->photoHandler->handlePhoto($message, $chatId);
+        if ($photoPath) {
+            $this->photoHandler->attachPhotoToReport($report, $photoPath);
+        }
+
+        DB::commit();
+    } catch (\Throwable $e) {
+        DB::rollBack();
+        throw $e;
+    }
+
+    $log->update(['maintenance_report_id' => $report->id]);
+    $assetName = $resolvedAsset ? $resolvedAsset->tech_ident_no : '(tidak dikenal)';
+    $this->telegram->sendMessage($chatId,
+        "Laporan tersimpan!\n\n" .
+        "ID: {$telegramReportId}\n" .
+        "Shift: {$shift} | {$date->format('d/m/Y')}\n" .
+        "Alat: {$assetName}\n" .
+        "Aksi: {$caption}\n\n" .
+        "Foto otomatis ter-attach."
+    );
+}
     /**
      * Report Rangkuman — format "Report shift X\nDD/MM/YYYY\n1. Aksi - done"
      * Multiple items, AI analisa batch
@@ -1116,6 +1107,18 @@ class TelegramBotController extends Controller
     {
         $replyTo = $message['reply_to_message'] ?? null;
         $caption = trim($message['caption'] ?? '');
+
+        // CEK: Jika ada caption dan TIDAK ada ID LMS -> REPORT HARIAN
+        if (!empty($caption) && !preg_match('/LMS-\d{8}-\d{3}/', $caption)) {
+            if ($employee) {
+                $this->handleReportHarianFromPhoto($message, $caption, $chatId, $employee, $log);
+            } else {
+                $this->telegram->sendMessage($chatId, "Anda belum terdaftar. Ketik /register.");
+            }
+            return;
+        }
+
+// ... sisanya tetap (original handlePhotoMessage)
 
         // PRIORITAS 1: ID dari CAPTION foto (yang paling spesifik)
         $reportIds = [];

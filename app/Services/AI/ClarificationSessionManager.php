@@ -633,8 +633,7 @@ class ClarificationSessionManager
      */
     public static function processItemByLetter(string $sessionId, int $itemIndex, string $letter): array
     {
-        $sessions = Cache::get(self::CACHE_PREFIX . 'sessions', []);
-        $session = $sessions[$sessionId] ?? null;
+        $session = self::getSession($sessionId);
 
         if (!$session) {
             return ['success' => false, 'error' => 'Sesi tidak ditemukan'];
@@ -673,8 +672,7 @@ class ClarificationSessionManager
         $item['notes'] = 'Dipilih oleh user';
 
         $session['items'] = $items;
-        $sessions[$sessionId] = $session;
-        Cache::put(self::CACHE_PREFIX . 'sessions', $sessions, 3600);
+        Cache::put(self::CACHE_PREFIX . $sessionId, $session, self::CACHE_TTL);
 
         return [
             'success' => true,
@@ -688,8 +686,7 @@ class ClarificationSessionManager
      */
     public static function skipAllItems(string $sessionId): array
     {
-        $sessions = Cache::get(self::CACHE_PREFIX . 'sessions', []);
-        $session = $sessions[$sessionId] ?? null;
+        $session = self::getSession($sessionId);
 
         if (!$session) {
             return ['success' => false, 'error' => 'Sesi tidak ditemukan'];
@@ -703,8 +700,7 @@ class ClarificationSessionManager
         }
 
         $session['status'] = 'completed';
-        $sessions[$sessionId] = $session;
-        Cache::put(self::CACHE_PREFIX . 'sessions', $sessions, 3600);
+        Cache::put(self::CACHE_PREFIX . $sessionId, $session, self::CACHE_TTL);
 
         return [
             'success' => true,
