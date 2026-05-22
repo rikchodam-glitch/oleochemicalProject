@@ -83,10 +83,11 @@ class AiGatewayService
      * Mode klarifikasi: AI menganalisa laporan ambigu untuk Telegram Bot.
      * Jika confidence < 80% -> return opsi-opsi yang mungkin.
      * Jika lokasi tidak disebut -> tampilkan opsi dari semua kemungkinan.
+     * Kirim SATU ITEM per panggilan ke AI.
      */
     public function analyzeWithClarification(string $userText, ?Employee $employee = null): array
     {
-        $systemPrompt = $this->buildClarificationPrompt($employee);
+        $systemPrompt = $this->buildClarificationPrompt($employee, $userText);
         $userPrompt = "Laporan: {$userText}\n\nAnalisa dan berikan opsi terbaik.";
 
         $result = $this->analyze($systemPrompt, $userPrompt, [
@@ -111,87 +112,118 @@ class AiGatewayService
     }
 
     /**
-     * Prompt khusus untuk klarifikasi - AI diminta deteksi ambiguity
-     * dan berikan opsi konkret dari database
+     * Prompt khusus untuk klarifikasi — filter asset berdasarkan kata kunci userText.
+     * Hanya kirim 30 asset yang relevan ke AI untuk mengurangi noise.
      */
-    protected function buildClarificationPrompt(?Employee $employee): string
+    protected function buildClarificationPrompt(?Employee $employee, string $userText = ''): string
     {
-        $allAssets = Asset::select('id', 'tech_ident_no', 'equipment_no', 'description')
-            ->with(['company:id,name', 'department:id,name', 'area:id,name', 'subArea:id,name'])
-            ->limit(150)
-            ->get()
-            ->groupBy(function($a) { return $a->company->name ?? 'Unknown'; });
+        // Filter asset berdasarkan kata kunci dari userText
+        $keywords = $this->extractKeywords($userText);
+        $query = Asset::select('id', 'tech_ident_no', 'equipment_no', 'description')
+            ->with(['company:id,name', 'department:id,name', 'area:id,name', 'subArea:id,name']);
+
+        if (!empty($keywords)) {
+            $query->where(function($q) use ($keywords) {
+                foreach ($keywords as $kw) {
+                    $q->orWhere('description', 'like', '%' . $kw . '%');
+                    $q->orWhere('tech_ident_no', 'like', '%' . $kw . '%');
+                    $q->orWhere('equipment_no', 'like', '%' . $kw . '%');
+                }
+            });
+        }
+
+        $allAssets = $query->limit(30)->get();
+
+        // Jika hasil filter kosong, ambil 20 asset random
+        if ($allAssets->isEmpty()) {
+            $allAssets = Asset::select('id', 'tech_ident_no', 'equipment_no', 'description')
+                ->with(['company:id,name', 'department:id,name', 'area:id,name', 'subArea:id,name'])
+                ->limit(20)
+                ->get();
+        }
 
         $contextParts = [];
-        foreach ($allAssets as $companyName => $companyAssets) {
+        $grouped = $allAssets->groupBy(function($a) { return $a->company->name ?? 'Unknown'; });
+        foreach ($grouped as $companyName => $companyAssets) {
             $items = $companyAssets->map(function($a) {
-                $loc = $a->department->name ?? '-';
-                $loc .= ' / ' . ($a->area->name ?? '-');
-                $loc .= ' / ' . ($a->subArea->name ?? '-');
-                return "  - [{$a->id}] {$a->tech_ident_no} - {$a->description} ($loc)";
+                $locParts = [];
+                if ($a->department) $locParts[] = $a->department->name;
+                if ($a->area) $locParts[] = $a->area->name;
+                if ($a->subArea) $locParts[] = $a->subArea->name;
+                $loc = implode(' - ', $locParts);
+                return '  [' . $a->id . '] ' . $a->tech_ident_no . ' - ' . $a->description . ($loc ? ' (' . $loc . ')' : '');
             })->implode("\n");
-            $contextParts[] = "=== {$companyName} ===\n{$items}";
+            $contextParts[] = '=== ' . $companyName . " ===\n" . $items;
         }
         $assetContext = implode("\n\n", $contextParts);
 
-        $prompt = "Anda adalah asisten pintar untuk sistem laporan maintenance pabrik oleochemical.
-Tugas Anda: menerima laporan mentah dari teknisi, lalu menentukan apakah laporan tersebut bisa langsung dicocokkan dengan asset database.
-
-DATABASE ASSET:
-{$assetContext}
-
-INSTRUKSI:
-1. Baca laporan teknisi dengan seksama
-2. Identifikasi apakah laporan menyebutkan:
-   a. Equipment/lokasi yang jelas (bisa langsung cocokkan)
-   b. Equipment yang ambigu (banyak kemungkinan)
-   c. Lokasi TIDAK disebut sama sekali
-
-3. Hitung confidence (0.0 - 1.0):
-   - >= 0.8: yakin, bisa langsung simpan
-   - 0.5 - 0.79: agak yakin, tapi perlu klarifikasi
-   - < 0.5: tidak yakin, perlu klarifikasi
-
-4. Jika laporan menyebutkan lokasi secara spesifik (nama PT, Dept, Area):
-   - Cari asset yang cocok di lokasi tersebut
-   - Berikan opsi yang relevan
-
-5. Jika laporan TIDAK menyebutkan lokasi sama sekali:
-   - Cari asset dari SEMUA lokasi
-   - Tampilkan maksimal 5 opsi terbaik
-
-6. Jika benar-benar tidak ada yang cocok:
-   - is_ambiguous = true
-   - possible_assets = []
-   - clarification_question = 'Tidak ditemukan equipment yang cocok. Jelaskan lebih detail.'
-
-FORMAT OUTPUT (JSON WAJIB):
-{
-  'is_ambiguous': true/false,
-  'confidence': 0.0-1.0,
-  'possible_assets': [
-    {
-      'id': 15,
-      'tech_ident_no': 'AC-TF-1-1',
-      'description': 'Lampu TL Lab EPE',
-      'location': 'PT EPE - QC - Lab - Lt.1',
-      'confidence': 0.65
-    }
-  ],
-  'clarification_question': 'Pertanyaan klarifikasi yang akan dikirim ke user...',
-  'new_aliases': [],
-  'normalized_text': 'Teks laporan yang sudah dikoreksi ejaan',
-  'summary': 'Ringkasan analisis...'
-}
-
-ATURAN PENTING:
-- possible_assets: maksimal 5 opsi, urutkan dari confidence tertinggi
-- clarification_question HARUS dalam Bahasa Indonesia yang ramah
-- Jika confidence >= 0.8: is_ambiguous = false, isi langsung asset_id
-- Jika ada alias yang cocok dari database, prioritaskan
-- Output HANYA JSON, tidak ada teks lain";
+        $prompt = 'Anda adalah asisten pintar untuk sistem laporan maintenance pabrik oleochemical.' . "\n\n";
+        $prompt .= 'Tugas Anda: Menerima SATU ITEM laporan dari teknisi, lalu mencari equipment' . "\n";
+        $prompt .= 'yang PALING COCOK di database.' . "\n\n";
+        $prompt .= "DATABASE ASSET:\n" . $assetContext . "\n\n";
+        $prompt .= 'INSTRUKSI KETAT:' . "\n";
+        $prompt .= '1. Baca teks laporan dengan saksama' . "\n";
+        $prompt .= '2. Identifikasi KATA KUNCI utama dari teks tersebut' . "\n";
+        $prompt .= '3. Cari asset yang JENISNYA SAMA dengan laporan:' . "\n";
+        $prompt .= '   - lampu, TL, LED, penerangan, lighting -> cari kata lampu, TL' . "\n";
+        $prompt .= '   - pompa, pump, pumping -> cari pump, pompa' . "\n";
+        $prompt .= '   - fan, kipas, blower, exhaust -> cari fan, blower' . "\n";
+        $prompt .= '   - AC, air conditioner, pendingin, cooling -> cari AC' . "\n";
+        $prompt .= '   - motor, bearing, bearing motor -> cari motor, bearing' . "\n";
+        $prompt .= '   - komputer, PC, printer, monitor -> cari IT equipment' . "\n";
+        $prompt .= '   - valve, vessel, tangki, tank -> equipment proses' . "\n";
+        $prompt .= '4. JIKA TIDAK ADA KATA KUNCI YANG COCOK, kembalikan possible_assets KOSONG' . "\n";
+        $prompt .= '5. JANGAN PERNAH mengembalikan equipment yang JENISNYA berbeda' . "\n";
+        $prompt .= "   CONTOH: teks bilang 'lampu', jangan kembalikan 'AC' meski lokasi sama" . "\n";
+        $prompt .= "   CONTOH: teks bilang 'pompa', jangan kembalikan 'fan'" . "\n";
+        $prompt .= "   CONTOH: teks bilang 'bearing motor', jangan kembalikan 'AC'" . "\n\n";
+        $prompt .= "FORMAT OUTPUT (JSON WAJIB):\n";
+        $prompt .= "{\n";
+        $prompt .= '  "is_ambiguous": true,' . "\n";
+        $prompt .= '  "confidence": 0.0,' . "\n";
+        $prompt .= '  "possible_assets": [' . "\n";
+        $prompt .= '    {' . "\n";
+        $prompt .= '      "id": 15,' . "\n";
+        $prompt .= '      "tech_ident_no": "AC-TF-1-1",' . "\n";
+        $prompt .= '      "description": "Lampu TL Lab EPE",' . "\n";
+        $prompt .= '      "location": "PT EPE - QC - Lab - Lt.1",' . "\n";
+        $prompt .= '      "confidence": 0.65' . "\n";
+        $prompt .= '    }' . "\n";
+        $prompt .= '  ],' . "\n";
+        $prompt .= '  "clarification_question": "Pilih equipment yang dimaksud:",' . "\n";
+        $prompt .= '  "normalized_text": "teks yang sudah dikoreksi",' . "\n";
+        $prompt .= '  "summary": "ringkasan analisis"' . "\n";
+        $prompt .= '}' . "\n\n";
+        $prompt .= 'ATURAN PENTING:' . "\n";
+        $prompt .= '- Jika tidak ada cocok: possible_assets = [], clarification_question = "Tidak ada equipment yang cocok."' . "\n";
+        $prompt .= '- clarification_question dalam Bahasa Indonesia yang ramah' . "\n";
+        $prompt .= '- Output HANYA JSON, tidak ada teks lain';
 
         return $prompt;
+    }
+
+    /**
+     * Ekstrak kata kunci dari teks laporan
+     */
+    protected function extractKeywords(string $text): array
+    {
+        // Hapus angka, tanda baca
+        $clean = preg_replace('/[0-9]+/', '', $text);
+        $clean = preg_replace('/[^a-zA-Z\s]/', ' ', $clean);
+
+        // Split jadi kata
+        $words = preg_split('/\s+/', strtolower(trim($clean)));
+        $words = array_filter($words, function($w) { return strlen($w) > 2; });
+
+        // Stop words
+        $stopWords = ['dan', 'atau', 'yang', 'di', 'ke', 'dari', 'dengan', 'untuk', 'pada',
+                       'ini', 'itu', 'saya', 'kami', 'perbaiki', 'ganti', 'cek', 'done',
+                       'report', 'shift', 'item', 'lab', 'epe', 'pt', 'qc', 'bd', 'produksi',
+                       'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'any',
+                       'can', 'had', 'her', 'was', 'one', 'our', 'out', 'has', 'have', 'been'];
+        $keywords = array_diff($words, $stopWords);
+
+        return array_values($keywords);
     }
 
     /**
