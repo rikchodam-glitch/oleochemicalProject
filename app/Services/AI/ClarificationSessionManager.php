@@ -626,4 +626,89 @@ class ClarificationSessionManager
             Log::warning("Gagal simpan alias dari klarifikasi: {$e->getMessage()}");
         }
     }
+
+    /**
+     * Proses pilihan user berdasarkan format "itemNum.Letter" (1-based)
+     * Contoh: "1.A" -> item index 0, opsi A (index 0 dari possible_assets)
+     */
+    public static function processItemByLetter(string $sessionId, int $itemIndex, string $letter): array
+    {
+        $sessions = Cache::get(self::CACHE_PREFIX . 'sessions', []);
+        $session = $sessions[$sessionId] ?? null;
+
+        if (!$session) {
+            return ['success' => false, 'error' => 'Sesi tidak ditemukan'];
+        }
+
+        $items = $session['items'] ?? [];
+        if (!isset($items[$itemIndex])) {
+            return ['success' => false, 'error' => 'Item ' . ($itemIndex + 1) . ' tidak ditemukan'];
+        }
+
+        $item = &$items[$itemIndex];
+
+        if (!empty($item['resolved_asset_id'])) {
+            return ['success' => false, 'error' => 'Item ' . ($itemIndex + 1) . ' sudah dikonfirmasi'];
+        }
+
+        $letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+        $assetIndex = array_search(strtoupper($letter), $letters);
+
+        if ($assetIndex === false) {
+            return ['success' => false, 'error' => 'Huruf ' . $letter . ' tidak dikenal'];
+        }
+
+        $possibleAssets = $item['possible_assets'] ?? [];
+        if (!isset($possibleAssets[$assetIndex])) {
+            return ['success' => false, 'error' => 'Opsi ' . $letter . ' tidak tersedia'];
+        }
+
+        $selectedAsset = $possibleAssets[$assetIndex];
+
+        $item['status'] = 'resolved';
+        $item['resolved_asset_id'] = $selectedAsset['id'];
+        $item['resolved_asset_code'] = $selectedAsset['tech_ident_no'] ?? '';
+        $item['resolved_asset_description'] = $selectedAsset['description'] ?? '';
+        $item['resolved_location'] = $selectedAsset['location'] ?? '';
+        $item['notes'] = 'Dipilih oleh user';
+
+        $session['items'] = $items;
+        $sessions[$sessionId] = $session;
+        Cache::put(self::CACHE_PREFIX . 'sessions', $sessions, 3600);
+
+        return [
+            'success' => true,
+            'item_index' => $itemIndex,
+            'asset' => $selectedAsset,
+        ];
+    }
+
+    /**
+     * Skip semua item yang belum resolved
+     */
+    public static function skipAllItems(string $sessionId): array
+    {
+        $sessions = Cache::get(self::CACHE_PREFIX . 'sessions', []);
+        $session = $sessions[$sessionId] ?? null;
+
+        if (!$session) {
+            return ['success' => false, 'error' => 'Sesi tidak ditemukan'];
+        }
+
+        foreach ($session['items'] as &$item) {
+            if (empty($item['resolved_asset_id'])) {
+                $item['status'] = 'skipped';
+                $item['notes'] = 'Dilewati user';
+            }
+        }
+
+        $session['status'] = 'completed';
+        $sessions[$sessionId] = $session;
+        Cache::put(self::CACHE_PREFIX . 'sessions', $sessions, 3600);
+
+        return [
+            'success' => true,
+            'session' => $session,
+        ];
+    }
 }

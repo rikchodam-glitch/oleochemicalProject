@@ -419,230 +419,262 @@ class TelegramBotController extends Controller
         }
 
         $this->telegram->sendMessage($chatId,
-            "Laporan diterima: " . count($parsed['items']) . " item ditemukan.\n" .
-            "AI sedang menganalisa..."
+            "📋 Laporan diterima: " . count($parsed['items']) . " item.\n" .
+            "🧠 AI sedang menganalisa..."
         );
 
-        // Sequential: untuk SETIAP item, kirim ke AI untuk klarifikasi
-        // Item yang langsung yakin (confidence >= 0.8) -> resolved
-        // Item yang ambigu -> masuk session
+        // PANGGIL AI 1x dengan full teks — AI harus return items + opsi per item
         $gateway = new AiGatewayService();
         $gateway->withContext($employee);
 
-        $clarifyItems = [];
-        $resolvedItems = [];
+        $allItemsText = "Laporan maintenance:\nShift: " . $parsed['shift'] . "\nTanggal: " . $parsed['date']->format('d/m/Y') . "\n\nItems:\n";
+        foreach ($parsed['items'] as $i => $item) {
+            $allItemsText .= ($i+1) . ". " . $item['action'] . " (" . $item['status'] . ")\n";
+        }
 
-        foreach ($parsed['items'] as $index => $item) {
-            try {
-                // Kirim SATU ITEM ke AI
-                $singleText = "Item " . ($index + 1) . ": " . $item['action'] . " (" . $item['status'] . ")";
-                $aiResult = $gateway->analyzeWithClarification($singleText, $employee);
+        try {
+            $aiResult = $gateway->analyzeWithClarification($allItemsText, $employee);
+        } catch (\Throwable $e) {
+            Log::warning("AI gagal: {$e->getMessage()}");
+            $aiResult = null;
+        }
 
-                $confidence = $aiResult['confidence'] ?? 0;
-                $possibleAssets = $aiResult['possible_assets'] ?? [];
-                $isAmbiguous = $aiResult['is_ambiguous'] ?? false;
+        $itemsOpsi = [];
 
-                // Jika AI yakin dan ada asset_id langsung
-                if ($confidence >= 0.8 && !$isAmbiguous && !empty($aiResult['normalized_text'])) {
-                    // Cari dari possible_assets yang confidence-nya tinggi
-                    $bestAsset = null;
-                    foreach ($possibleAssets as $pa) {
-                        if (($pa['confidence'] ?? 0) >= 0.8) {
-                            $bestAsset = $pa;
-                            break;
-                        }
-                    }
+        // Process AI result or fallback
+        if ($aiResult && isset($aiResult['items']) && !empty($aiResult['items'])) {
+            foreach ($aiResult['items'] as $index => $aiItem) {
+                $origItem = $parsed['items'][$index] ?? null;
+                $conf = $aiItem['confidence'] ?? 0;
+                $possibleAssets = $aiItem['possible_assets'] ?? [];
 
-                    if ($bestAsset) {
-                        $resolvedItems[] = [
-                            'item_index' => $index,
-                            'action' => $item['action'],
-                            'status' => $item['status'],
-                            'asset_id' => $bestAsset['id'],
-                            'tech_ident_no' => $bestAsset['tech_ident_no'],
-                            'description' => $bestAsset['description'],
-                            'location' => $bestAsset['location'] ?? '',
-                            'confidence' => $confidence,
+                if ($conf >= 0.8 && !empty($aiItem['suggested_asset_id'])) {
+                    // Resolved — langsung
+                    $assetModel = \App\Models\Asset::find($aiItem['suggested_asset_id']);
+                    $itemsOpsi[] = [
+                        'index' => $index,
+                        'action' => $origItem['action'] ?? '',
+                        'status' => $origItem['status'] ?? 'done',
+                        'resolved' => true,
+                        'asset_id' => $aiItem['suggested_asset_id'],
+                        'tech_ident_no' => $assetModel->tech_ident_no ?? $aiItem['suggested_tech_ident_no'] ?? '',
+                        'description' => $assetModel->description ?? '',
+                    ];
+                } else {
+                    // Ambigu — perlu opsi
+                    $opsi = [];
+                    $letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+                    foreach ($possibleAssets as $paIdx => $pa) {
+                        $opsi[] = [
+                            'letter' => $letters[$paIdx] ?? '?',
+                            'id' => $pa['id'],
+                            'tech_ident_no' => $pa['tech_ident_no'] ?? '',
+                            'description' => $pa['description'] ?? '',
+                            'location' => $pa['location'] ?? '',
                         ];
-                        continue;
                     }
+                    $itemsOpsi[] = [
+                        'index' => $index,
+                        'action' => $origItem['action'] ?? $aiItem['original_text'] ?? '',
+                        'status' => $origItem['status'] ?? 'done',
+                        'resolved' => false,
+                        'opsi' => $opsi,
+                    ];
                 }
-
-                // Ambigu -> perlu klarifikasi
-                $clarifyItems[] = [
+            }
+        } else {
+            // AI gagal — semua item jadi ambigu tanpa opsi
+            foreach ($parsed['items'] as $index => $item) {
+                $itemsOpsi[] = [
+                    'index' => $index,
                     'action' => $item['action'],
                     'status' => $item['status'] ?? 'done',
-                    'possible_assets' => $possibleAssets,
-                    'clarification_question' => $aiResult['clarification_question'] ?? 'Pilih equipment yang dimaksud:',
-                    'parsed_date' => $parsed['date'],
-                    'parsed_shift' => $parsed['shift'],
-                    'confidence' => $confidence,
-                ];
-
-            } catch (\Throwable $e) {
-                Log::warning("AI gagal untuk item {$index}: {$e->getMessage()}");
-                // AI error -> jadi unidentified
-                $clarifyItems[] = [
-                    'action' => $item['action'],
-                    'status' => $item['status'] ?? 'done',
-                    'possible_assets' => [],
-                    'clarification_question' => 'AI tidak tersedia. Laporan akan diteruskan ke admin.',
-                    'parsed_date' => $parsed['date'],
-                    'parsed_shift' => $parsed['shift'],
-                    'confidence' => 0,
+                    'resolved' => false,
+                    'opsi' => [],
                 ];
             }
         }
 
-        // Kirim konfirmasi item yang langsung resolved
-        if (!empty($resolvedItems)) {
-            $confirmMsg = "Item yang langsung dikenali:\n";
-            foreach ($resolvedItems as $ri) {
-                $confirmMsg .= "- Item {$ri['item_index']}: {$ri['tech_ident_no']} - {$ri['description']}\n";
+        // BUAT PESAN UNTUK USER — semua item dalam 1 pesan
+        $msg = "🤖 <b>Analisa AI</b>\n\n";
+        $msg .= "Ditemukan " . count($itemsOpsi) . " item:\n\n";
+
+        foreach ($itemsOpsi as $io) {
+            $num = $io['index'] + 1;
+            $msg .= "<b>{$num}. {$io['action']}</b> [{$io['status']}]\n";
+            if ($io['resolved']) {
+                $msg .= "   ✅ {$io['tech_ident_no']} — {$io['description']}\n";
+            } elseif (!empty($io['opsi'])) {
+                $msg .= "   Pilih:\n";
+                foreach ($io['opsi'] as $o) {
+                    $msg .= "   {$o['letter']}. {$o['tech_ident_no']} — {$o['description']}";
+                    if ($o['location']) $msg .= " ({$o['location']})";
+                    $msg .= "\n";
+                }
+            } else {
+                $msg .= "   ❓ Tidak ada opsi\n";
             }
-            $this->telegram->sendMessage($chatId, $confirmMsg);
-            // TODO: simpan resolved items ke DB
+            $msg .= "\n";
         }
 
-        // Jika semua item resolved
-        if (empty($clarifyItems)) {
-            $this->telegram->sendMessage($chatId,
-                "Semua item berhasil dikenali! Laporan tersimpan."
-            );
+        // Petunjuk cara menjawab
+        $ambiguousCount = count(array_filter($itemsOpsi, fn($io) => !$io['resolved']));
+        if ($ambiguousCount > 0) {
+            $msg .= "📝 <b>Cara menjawab:</b>\n";
+            $msg .= "Balas dengan format nomor.huruf\n";
+            $msg .= "Contoh: <code>1.A 2.C 3.B 4.A</code>\n";
+            $msg .= "Atau: <code>1.A</code> jika hanya item 1 saja\n";
+            $msg .= "Ketik <code>lewati</code> untuk skip semua\n\n";
+            $msg .= "⏳ Sisa waktu: 5 menit";
+        } else {
+            $msg .= "\n✅ Semua item berhasil dikenali! Menyimpan laporan...";
             $this->processNormalReport($parsed, $text, $chatId, $employee, $log, null);
             return;
         }
 
-        // Buat session multi-item untuk item ambigu
+        // Simpan session dengan format baru
         $session = \App\Services\AI\ClarificationSessionManager::createSession(
             (int)$chatId,
             $chatId,
-            [], // aiResult kosong
+            $aiResult ?? [],
             $employee,
             $parsed['raw_text'],
-            $parsed['items'] ?? null,
-            $clarifyItems
+            $parsed['items'] ?? null
         );
 
-        if (empty($session) || empty($session['items'])) {
-            $this->processNormalReport($parsed, $text, $chatId, $employee, $log, null);
+        // Kirim pesan ke user - TANPA keyboard (user ketik manual)
+        $this->telegram->sendMessage($chatId, $msg);
+    }
+
+      /**
+     * Proses balasan klarifikasi dari user - format: "1.A 2.C 3.B 4.A"
+     * atau "1.A" untuk satu item.
+     */
+    protected function processClarificationReply(string $text, string $chatId, Employee $employee, TelegramBotLog $log, array $activeSession): void
+    {
+        $sessionId = $activeSession['session_id'];
+        $text = trim($text);
+
+        // Cek apakah user mau skip semua
+        if (in_array(strtolower($text), ['lewati', 'skip', 'tidak ada', '0'])) {
+            // Skip semua item ambigu
+            $result = \App\Services\AI\ClarificationSessionManager::skipAllItems($sessionId);
+            if (!$result['success']) {
+                $this->telegram->sendMessage($chatId, "❌ " . ($result['error'] ?? 'Terjadi kesalahan.'));
+                return;
+            }
+            $session = $result['session'];
+            // Selesai, simpan
+            $this->finalizeSession($sessionId, $session, $chatId, $employee, $log);
             return;
         }
 
-        // Kirim item pertama ke user
-        $currentItem = \App\Services\AI\ClarificationSessionManager::getCurrentItem($session);
-        $msg = \App\Services\AI\ClarificationSessionManager::buildClarificationMessage($session, $currentItem);
+        // Parse format: "1.A 2.C 3.B 4.A" atau "1.A 2.C" atau "1.A"
+        $pattern = '/(\d+)\s*[\.\:\-]?\s*([A-Ha-h])/';
+        preg_match_all($pattern, $text, $matches, PREG_SET_ORDER);
 
-        if (!empty($currentItem['possible_assets'])) {
-            $buttons = \App\Services\AI\ClarificationSessionManager::buildClarificationKeyboard($session, $currentItem);
-            $this->telegram->sendMessageWithKeyboard($chatId, $msg, $buttons);
+        if (empty($matches)) {
+            // Coba format alternatif: "A1" atau "1A"
+            $pattern2 = '/(\d+)\s*([A-Ha-h])/';
+            preg_match_all($pattern2, $text, $matches2, PREG_SET_ORDER);
+            if (!empty($matches2)) {
+                $matches = $matches2;
+            } else {
+                $this->telegram->sendMessage($chatId,
+                    "⚠️ Format tidak dikenali.\n\n" .
+                    "Gunakan format: <code>1.A 2.C 3.B 4.A</code>\n" .
+                    "Atau: <code>1.A</code> untuk satu item\n" .
+                    "Atau ketik <b>lewati</b> untuk skip semua."
+                );
+                return;
+            }
+        }
+
+        // Proses setiap pilihan user
+        $results = [];
+        foreach ($matches as $m) {
+            $itemNum = (int)$m[1];
+            $letter = strtoupper($m[2]);
+            $results[] = \App\Services\AI\ClarificationSessionManager::processItemByLetter(
+                $sessionId, $itemNum - 1, $letter // itemNum 1-based -> 0-based index
+            );
+        }
+
+        // Cek hasil
+        $successCount = 0;
+        $errorCount = 0;
+        $errors = [];
+        foreach ($results as $r) {
+            if ($r['success']) {
+                $successCount++;
+            } else {
+                $errorCount++;
+                $errors[] = $r['error'] ?? 'Error';
+            }
+        }
+
+        if ($errorCount > 0) {
+            $this->telegram->sendMessage($chatId,
+                "⚠️ {$successCount} sukses, {$errorCount} gagal:\n" .
+                implode("\n", array_slice($errors, 0, 3))
+            );
+        }
+
+        // Cek apakah semua item sudah terisi
+        $session = \App\Services\AI\ClarificationSessionManager::getSession($sessionId);
+        if (!$session) {
+            $this->telegram->sendMessage($chatId, "❌ Sesi telah kadaluarsa.");
+            return;
+        }
+
+        // Cek apakah semua item sudah resolved
+        $allResolved = true;
+        foreach ($session['items'] as $item) {
+            if (empty($item['resolved_asset_id'])) {
+                $allResolved = false;
+                break;
+            }
+        }
+
+        if ($allResolved) {
+            // Semua selesai
+            $this->finalizeSession($sessionId, $session, $chatId, $employee, $log);
         } else {
-            $this->telegram->sendMessage($chatId, $msg);
+            // Masih ada yang belum
+            $remainingItems = [];
+            foreach ($session['items'] as $idx => $item) {
+                if (empty($item['resolved_asset_id'])) {
+                    $remainingItems[] = ($idx + 1) . ". " . ($item['raw_text'] ?? 'Item ' . ($idx+1));
+                }
+            }
+            $this->telegram->sendMessage($chatId,
+                "✅ {$successCount} item dikonfirmasi!\n\n" .
+                "Masih ada " . count($remainingItems) . " item:\n" .
+                implode("\n", $remainingItems) . "\n\n" .
+                "Balas dengan format: <code>1.A 2.C 3.B</code>"
+            );
         }
     }
 
     /**
-     * Proses balasan klarifikasi dari user (multi-item sequential)
+     * Finalisasi session — simpan semua report, kirim summary
      */
-    protected function processClarificationReply(string $text, string $chatId, Employee $employee, TelegramBotLog $log, array $activeSession): void
+    protected function finalizeSession(string $sessionId, array $session, string $chatId, Employee $employee, TelegramBotLog $log): void
     {
-        // Proses item saat ini
-        $result = \App\Services\AI\ClarificationSessionManager::processCurrentItem(
-            $activeSession['session_id'],
-            $text
-        );
+        // Simpan semua report
+        $savedIds = \App\Services\AI\ClarificationSessionManager::saveAllReports($session);
 
-        if (!$result['success']) {
-            $this->telegram->sendMessage($chatId, "❌ " . ($result['error'] ?? 'Terjadi kesalahan. Silakan coba lagi.'));
-            return;
+        if (!empty($savedIds)) {
+            $log->update(['maintenance_report_id' => $savedIds[0]]);
         }
 
-        $session = $result['session'];
+        // Build summary
+        $summary = \App\Services\AI\ClarificationSessionManager::getSummary($session);
+        $summaryMsg = \App\Services\AI\ClarificationSessionManager::buildSummaryMessage($summary, $employee);
+        $this->telegram->sendMessage($chatId, $summaryMsg);
 
-        // ✅ ITEM RESOLVED
-        if ($result['resolved']) {
-            $asset = $result['asset'];
-            $confirmMsg = "✅ <b>Item " . ($result['item_index'] + 1) . " dikonfirmasi!</b>\n\n" .
-                "Equipment: <b>{$asset['tech_ident_no']}</b>\n" .
-                "Deskripsi: {$asset['description']}\n";
-            if (!empty($asset['location'])) {
-                $confirmMsg .= "Lokasi: {$asset['location']}\n";
-            }
-
-            $this->telegram->sendMessage($chatId, $confirmMsg);
-        }
-
-        // ⏭️ ITEM SKIPPED
-        if (!empty($result['skipped'])) {
-            $this->telegram->sendMessage($chatId,
-                "⏭️ <b>Item " . ($result['item_index'] + 1) . " dilewati.</b>\n" .
-                "Laporan akan diteruskan ke admin."
-            );
-        }
-
-        // ⚠️ ITEM UNIDENTIFIED (max attempts)
-        if (!empty($result['unidentified'])) {
-            $this->telegram->sendMessage($chatId,
-                "⚠️ <b>Item " . ($result['item_index'] + 1) . " tidak teridentifikasi.</b>\n" .
-                "Setelah " . $result['attempts'] . " kali percobaan, laporan diteruskan ke admin."
-            );
-        }
-
-        // ✅ SEMUA SELESAI
-        if ($result['completed']) {
-            $summary = \App\Services\AI\ClarificationSessionManager::getSummary($session);
-            $summaryMsg = \App\Services\AI\ClarificationSessionManager::buildSummaryMessage($summary, $employee);
-
-            // Simpan semua report
-            $savedIds = \App\Services\AI\ClarificationSessionManager::saveAllReports($session);
-
-            if (!empty($savedIds)) {
-                $log->update(['maintenance_report_id' => $savedIds[0]]);
-            }
-
-            $this->telegram->sendMessage($chatId, $summaryMsg);
-
-            // Hapus session
-            \App\Services\AI\ClarificationSessionManager::destroySession($session['session_id']);
-            return;
-        }
-
-        // ➡️ LANJUT KE ITEM BERIKUTNYA
-        if (!$result['completed'] && ($result['resolved'] || !empty($result['skipped']) || !empty($result['unidentified']))) {
-            $nextIdx = $result['next_item_index'];
-            $remaining = $result['remaining_items'];
-            $total = $result['total_items'];
-
-            $nextItem = \App\Services\AI\ClarificationSessionManager::getCurrentItem($session);
-            $nextMsg = \App\Services\AI\ClarificationSessionManager::buildClarificationMessage($session, $nextItem);
-
-            $nextMsg = "➡️ <b>Lanjut Item " . ($nextIdx + 1) . " dari {$total}</b>\n\n" . $nextMsg;
-
-            if (!empty($nextItem['possible_assets'])) {
-                $buttons = \App\Services\AI\ClarificationSessionManager::buildClarificationKeyboard($session, $nextItem);
-                $this->telegram->sendMessageWithKeyboard($chatId, $nextMsg, $buttons);
-            } else {
-                $this->telegram->sendMessage($chatId, $nextMsg);
-            }
-            return;
-        }
-
-        // ❌ GAGAL COCOK, MASIH ADA SISA PERCOBAAN
-        if (!$result['resolved'] && !$result['completed']) {
-            $remaining = $result['remaining_attempts'];
-            $error = $result['error'] ?? 'Pilihan tidak dikenali.';
-
-            $currentItem = \App\Services\AI\ClarificationSessionManager::getCurrentItem($session);
-            $retryMsg = "⚠️ <b>{$error}</b>\n\n";
-            $retryMsg .= \App\Services\AI\ClarificationSessionManager::buildClarificationMessage($session, $currentItem);
-
-            if (!empty($currentItem['possible_assets'])) {
-                $buttons = \App\Services\AI\ClarificationSessionManager::buildClarificationKeyboard($session, $currentItem);
-                $this->telegram->sendMessageWithKeyboard($chatId, $retryMsg, $buttons);
-            } else {
-                $this->telegram->sendMessage($chatId, $retryMsg);
-            }
-        }
+        // Hapus session
+        \App\Services\AI\ClarificationSessionManager::destroySession($sessionId);
     }
 
     /**
