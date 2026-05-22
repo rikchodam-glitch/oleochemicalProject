@@ -94,6 +94,12 @@ class AiGatewayService
                     continue;
                 }
 
+                // Cek quota harian
+                if (!$this->checkDailyQuota($provider)) {
+                    Log::info("AI Daily quota exhausted for {$provider['name']}, trying next...");
+                    continue;
+                }
+
                 // Cek quota bulanan
                 if (!$this->checkMonthlyQuota($provider)) {
                     Log::info("AI Monthly quota exhausted for {$provider['name']}, trying next...");
@@ -488,7 +494,29 @@ PROMPT;
     }
 
     /**
-     * Cek quota bulanan
+     * Cek quota harian (TPD) — auto reset jika sudah beda hari
+     */
+    protected function checkDailyQuota(array &$provider): bool
+    {
+        if (!$provider['max_daily_tokens']) return true;
+
+        $now = now();
+
+        // Reset jika belum pernah atau sudah beda hari
+        if (!$provider['daily_reset_at'] ||
+            !Carbon::parse($provider['daily_reset_at'])->isSameDay($now)) {
+            $provider['current_daily_tokens'] = 0;
+            $provider['daily_reset_at'] = $now;
+
+            AiProvider::where('id', $provider['id'])
+                ->update(['current_daily_tokens' => 0, 'daily_reset_at' => $now]);
+        }
+
+        return $provider['current_daily_tokens'] < $provider['max_daily_tokens'];
+    }
+
+    /**
+     * Cek quota bulanan — auto reset jika sudah beda bulan
      */
     protected function checkMonthlyQuota(array &$provider): bool
     {
@@ -496,8 +524,9 @@ PROMPT;
 
         $now = now();
 
+        // Reset jika belum pernah atau sudah beda bulan
         if (!$provider['month_reset_at'] ||
-            Carbon::parse($provider['month_reset_at'])->diffInMonths($now) >= 1) {
+            !Carbon::parse($provider['month_reset_at'])->isSameMonth($now)) {
             $provider['current_month_tokens'] = 0;
             $provider['month_reset_at'] = $now;
 
@@ -509,7 +538,7 @@ PROMPT;
     }
 
     /**
-     * Update statistik provider
+     * Update statistik provider (termasuk daily tokens)
      */
     protected function updateProviderStats(int $providerId, array $usage): void
     {
@@ -518,6 +547,7 @@ PROMPT;
             'total_tokens_used' => DB::raw('total_tokens_used + ' . ($usage['total_tokens'] ?? 0)),
             'requests_this_minute' => DB::raw('requests_this_minute + 1'),
             'current_month_tokens' => DB::raw('current_month_tokens + ' . ($usage['total_tokens'] ?? 0)),
+            'current_daily_tokens' => DB::raw('current_daily_tokens + ' . ($usage['total_tokens'] ?? 0)),
             'last_used_at' => now(),
             'health_status' => 'healthy',
         ]);
@@ -600,6 +630,8 @@ PROMPT;
             ->map(function($provider) {
                 $sisa = $provider->getRemainingMonthlyTokens();
                 $persen = $provider->getTokenUsagePercentage();
+                $sisaDaily = $provider->getRemainingDailyTokens();
+                $persenDaily = $provider->getDailyTokenUsagePercentage();
 
                 return [
                     'id' => $provider->id,
@@ -610,6 +642,14 @@ PROMPT;
                     'is_active' => $provider->is_active,
                     'total_requests' => $provider->total_requests,
                     'total_tokens' => $provider->total_tokens_used,
+                    // Daily quota
+                    'max_daily_tokens' => $provider->max_daily_tokens,
+                    'current_daily_tokens' => $provider->current_daily_tokens,
+                    'sisa_daily_tokens' => $sisaDaily,
+                    'persen_daily_sisa' => $persenDaily !== null ? (100 - $persenDaily) : null,
+                    // Monthly quota
+                    'max_monthly_tokens' => $provider->max_monthly_tokens,
+                    'current_month_tokens' => $provider->current_month_tokens,
                     'sisa_tokens' => $sisa,
                     'persen_sisa' => $persen !== null ? (100 - $persen) : null,
                     'last_used' => $provider->last_used_at ? $provider->last_used_at->diffForHumans() : 'Belum pernah',
@@ -617,6 +657,7 @@ PROMPT;
                     'health_status' => $provider->health_status,
                     'status_label' => $provider->status_label,
                     'status_color' => $provider->status_color,
+                    'has_quota' => $provider->hasAvailableQuota(),
                 ];
             })->toArray();
     }

@@ -109,17 +109,17 @@
             <div class="mb-4 bg-white rounded-xl border border-slate-200 shadow-sm p-4">
                 <form action="{{ url()->current() }}" method="GET" class="flex flex-wrap gap-3 items-end">
                     <div>
-                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Dari Tanggal</label>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Dari Tanggal</label>
                         <input type="date" name="filter_date_from" value="{{ request('filter_date_from') }}"
                             class="border border-slate-200 rounded-lg p-2 text-xs focus:ring-blue-500 focus:border-blue-500 outline-none w-36">
                     </div>
                     <div>
-                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Sampai Tanggal</label>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Sampai Tanggal</label>
                         <input type="date" name="filter_date_to" value="{{ request('filter_date_to') }}"
                             class="border border-slate-200 rounded-lg p-2 text-xs focus:ring-blue-500 focus:border-blue-500 outline-none w-36">
                     </div>
                     <div>
-                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Status</label>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Status</label>
                         <select name="filter_status" class="border border-slate-200 rounded-lg p-2 text-xs focus:ring-blue-500 focus:border-blue-500 outline-none">
                             <option value="">Semua Status</option>
                             <option value="done" {{ request('filter_status') == 'done' ? 'selected' : '' }}>✅ Done</option>
@@ -128,7 +128,7 @@
                         </select>
                     </div>
                     <div>
-                        <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Alat (Asset)</label>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Alat (Asset)</label>
                         <select name="filter_asset" class="border border-slate-200 rounded-lg p-2 text-xs focus:ring-blue-500 focus:border-blue-500 outline-none min-w-[180px]">
                             <option value="">Semua Alat</option>
                             @foreach($allAssets as $ast)
@@ -149,7 +149,7 @@
             <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                 <div class="overflow-x-auto">
                     <table class="w-full text-left text-sm" id="reports_table">
-                        <thead class="bg-slate-100 text-slate-500 text-[10px] uppercase font-bold tracking-wider">
+                        <thead class="bg-slate-50 text-slate-500 text-[11px] uppercase font-semibold tracking-normal">
                             <tr>
                                 <th class="px-4 py-3">Tanggal</th>
                                 <th class="px-4 py-3">Alat (Equipment)</th>
@@ -157,7 +157,7 @@
                                 <th class="px-4 py-3">Tindakan Perbaikan</th>
                                 <th class="px-4 py-3">Shift</th>
                                 <th class="px-4 py-3">Status</th>
-                                <th class="px-4 py-3 text-center">🧠 AI</th>
+                                <th class="px-4 py-3 text-center">AI</th>
                                 <th class="px-4 py-3 text-center">Dokumen</th>
                                 <th class="px-4 py-3 text-center">Aksi</th>
                             </tr>
@@ -186,8 +186,8 @@
                                 </td>
                                 <td class="px-4 py-3">
                                     @php $s = strtolower($report->status); @endphp
-                                    <span class="px-2 py-1 rounded-full text-[10px] font-black uppercase whitespace-nowrap
-                                        {{ $s == 'done' ? 'bg-green-100 text-green-700' : ($s == 'pending' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700') }}">
+                                    <span class="px-2 py-0.5 rounded-md text-[11px] font-medium uppercase whitespace-nowrap
+                                        {{ $s == 'done' ? 'bg-emerald-100 text-emerald-700' : ($s == 'pending' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700') }}">
                                         {{ $s }}
                                     </span>
                                 </td>
@@ -202,24 +202,24 @@
                                         if ($report->ai_notes) $aiTitle .= ' | Catatan: ' . $report->ai_notes;
                                     @endphp
                                     @if($report->ai_suggested && $report->ai_confidence !== null && $report->ai_confidence >= 0.8)
-                                        <span class="text-[10px] bg-green-100 text-green-700 px-2 py-1 rounded-full font-bold cursor-help"
+                                        <span class="text-[11px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-md font-medium cursor-help"
                                             title="{{ $aiTitle }}">
-                                            ✅
+                                            AI
                                         </span>
                                     @elseif($report->ai_suggested && $report->ai_confidence !== null && $report->ai_confidence >= 0.5)
-                                        <span class="text-[10px] bg-amber-100 text-amber-700 px-2 py-1 rounded-full font-bold cursor-help"
+                                        <span class="text-[11px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-md font-medium cursor-help"
                                             title="{{ $aiTitle }}">
-                                            ⚠️
+                                            AI
                                         </span>
                                     @elseif($report->needs_admin_review || $report->ai_suggested)
-                                        <span class="text-[10px] bg-red-100 text-red-700 px-2 py-1 rounded-full font-bold cursor-help"
+                                        <span class="text-[11px] bg-red-100 text-red-700 px-2 py-0.5 rounded-md font-medium cursor-help"
                                             title="{{ $aiTitle ?: 'Perlu review admin' }}">
-                                            ❌
+                                            Review
                                         </span>
                                     @elseif($hasAiData)
-                                        <span class="text-[10px] bg-slate-100 text-slate-600 px-2 py-1 rounded-full font-bold cursor-help"
+                                        <span class="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-medium cursor-help"
                                             title="{{ $aiTitle }}">
-                                            🧠
+                                            AI
                                         </span>
                                     @else
                                         <span class="text-[10px] text-slate-300">-</span>
@@ -293,9 +293,9 @@
                     $pendingCount = $allFlat->filter(fn($r) => strtolower($r->status) == 'pending')->count();
                     $continueCount = $allFlat->filter(fn($r) => strtolower($r->status) == 'continue')->count();
                 @endphp
-                <div class="bg-green-50 p-3 rounded-lg border border-green-200">
-                    <div class="text-2xl font-black text-green-600">{{ $doneCount }}</div>
-                    <div class="text-[10px] text-green-700 font-bold uppercase">Done</div>
+                <div class="bg-emerald-50 p-3 rounded-lg border border-emerald-200">
+                    <div class="text-2xl font-black text-emerald-600">{{ $doneCount }}</div>
+                    <div class="text-[10px] text-emerald-700 font-bold uppercase">Done</div>
                 </div>
                 <div class="bg-amber-50 p-3 rounded-lg border border-amber-200">
                     <div class="text-2xl font-black text-amber-600">{{ $continueCount }}</div>
@@ -310,8 +310,8 @@
     </div>
 
     <!-- ==================== MODAL CREATE MAINTENANCE ==================== -->
-    <div id="createReportModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
-        <div class="bg-white rounded-xl shadow-lg w-full max-w-lg p-6 relative max-h-[90vh] overflow-y-auto">
+    <div id="createReportModal" class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-lg w-full max-w-lg p-6 relative max-h-[90vh] overflow-y-auto border border-slate-200">
             <button onclick="closeCreateModal()" class="absolute top-4 right-4 text-gray-500 hover:text-red-500 text-2xl font-bold">&times;</button>
             <h3 class="text-xl font-bold mb-4">➕ Tambah Laporan Perbaikan</h3>
 
@@ -325,24 +325,13 @@
                                 class="w-full border-b border-gray-300 rounded-t-lg p-2 text-sm focus:ring-blue-500 focus:border-blue-500 outline-none">
                             <div id="create_asset_container" class="max-h-52 overflow-y-auto p-2 custom-scrollbar">
                                 <div class="space-y-1" id="create_asset_list">
-                                    @foreach($allAssets->groupBy('object_type') as $type => $assets)
-                                        <details class="group create-asset-group">
-                                            <summary class="flex items-center gap-2 p-2 hover:bg-blue-50 rounded-lg cursor-pointer text-xs font-bold text-slate-600 list-none outline-none">
-                                                <span class="transform group-open:rotate-90 transition-transform text-[10px]">▶</span>
-                                                <span class="group-title">{{ $type ?: 'Tipe Lainnya' }}</span>
-                                                <span class="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full ml-auto group-count">{{ count($assets) }}</span>
-                                            </summary>
-                                            <div class="pl-4 space-y-1 mt-1">
-                                                @foreach($assets as $ast)
-                                                <label class="flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors hover:bg-blue-50 asset-item">
-                                                    <input type="radio" name="asset_id" value="{{ $ast->id }}" required
-                                                        class="w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer">
-                                                    <span class="text-xs text-slate-600 font-medium asset-name">{{ $ast->tech_ident_no }}</span>
-                                                    <span class="text-[10px] text-slate-400 ml-auto truncate max-w-[120px] asset-desc">{{ Str::limit($ast->description, 20) }}</span>
-                                                </label>
-                                                @endforeach
-                                            </div>
-                                        </details>
+                                    @foreach($allAssets as $ast)
+                                    <label class="flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors hover:bg-blue-50 asset-item">
+                                        <input type="radio" name="asset_id" value="{{ $ast->id }}" required
+                                            class="w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer">
+                                        <span class="text-xs text-slate-600 font-medium asset-name">{{ $ast->tech_ident_no }}</span>
+                                        <span class="text-[10px] text-slate-400 ml-auto truncate max-w-[120px] asset-desc">{{ Str::limit($ast->description, 20) }}</span>
+                                    </label>
                                     @endforeach
                                 </div>
                             </div>
@@ -401,8 +390,8 @@
     </div>
 
     <!-- ==================== MODAL EDIT MAINTENANCE ==================== -->
-    <div id="editReportModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
-        <div class="bg-white rounded-xl shadow-lg w-full max-w-lg p-6 relative max-h-[90vh] overflow-y-auto">
+    <div id="editReportModal" class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-lg w-full max-w-lg p-6 relative max-h-[90vh] overflow-y-auto border border-slate-200">
             <button onclick="closeEditModal()" class="absolute top-4 right-4 text-gray-500 hover:text-red-500 text-2xl font-bold">&times;</button>
             <h3 class="text-xl font-bold mb-4">✏️ Edit Laporan Perbaikan</h3>
 
@@ -417,24 +406,13 @@
                                 class="w-full border-b border-gray-300 rounded-t-lg p-2 text-sm focus:ring-blue-500 focus:border-blue-500 outline-none">
                             <div id="edit_asset_container" class="max-h-52 overflow-y-auto p-2 custom-scrollbar">
                                 <div class="space-y-1" id="edit_asset_list">
-                                    @foreach($allAssets->groupBy('object_type') as $type => $assets)
-                                        <details class="group edit-asset-group">
-                                            <summary class="flex items-center gap-2 p-2 hover:bg-blue-50 rounded-lg cursor-pointer text-xs font-bold text-slate-600 list-none outline-none">
-                                                <span class="transform group-open:rotate-90 transition-transform text-[10px]">▶</span>
-                                                <span class="group-title">{{ $type ?: 'Tipe Lainnya' }}</span>
-                                                <span class="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full ml-auto group-count">{{ count($assets) }}</span>
-                                            </summary>
-                                            <div class="pl-4 space-y-1 mt-1">
-                                                @foreach($assets as $ast)
-                                                <label class="flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors hover:bg-blue-50 asset-item">
-                                                    <input type="radio" name="asset_id" value="{{ $ast->id }}" required
-                                                        class="w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer asset_radio">
-                                                    <span class="text-xs text-slate-600 font-medium asset-name">{{ $ast->tech_ident_no }}</span>
-                                                    <span class="text-[10px] text-slate-400 ml-auto truncate max-w-[120px] asset-desc">{{ Str::limit($ast->description, 20) }}</span>
-                                                </label>
-                                                @endforeach
-                                            </div>
-                                        </details>
+                                    @foreach($allAssets as $ast)
+                                    <label class="flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors hover:bg-blue-50 asset-item">
+                                        <input type="radio" name="asset_id" value="{{ $ast->id }}" required
+                                            class="w-4 h-4 text-blue-600 focus:ring-blue-500 cursor-pointer asset_radio">
+                                        <span class="text-xs text-slate-600 font-medium asset-name">{{ $ast->tech_ident_no }}</span>
+                                        <span class="text-[10px] text-slate-400 ml-auto truncate max-w-[120px] asset-desc">{{ Str::limit($ast->description, 20) }}</span>
+                                    </label>
                                     @endforeach
                                 </div>
                             </div>
@@ -493,8 +471,8 @@
     </div>
 
     <!-- ==================== MODAL VIEW DOKUMENTASI ==================== -->
-    <div id="docViewModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center z-50">
-        <div class="bg-white rounded-xl shadow-lg w-full max-w-3xl p-6 relative max-h-[90vh] overflow-y-auto">
+    <div id="docViewModal" class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-lg w-full max-w-3xl p-6 relative max-h-[90vh] overflow-y-auto border border-slate-200">
             <button onclick="closeDocModal()" class="absolute top-4 right-4 text-gray-500 hover:text-red-500 text-2xl font-bold z-10">&times;</button>
             <h3 class="text-xl font-bold mb-4">📷 Dokumentasi Laporan</h3>
             <p class="text-sm text-slate-500 mb-4" id="doc_asset_label">Asset: -</p>
@@ -853,7 +831,7 @@
 
             if (type === 'loading') {
                 panel.innerHTML = `<div class="flex items-center gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200">
-                    <div class="animate-spin w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+                    <div class="animate-spin w-4 h-4 border-2 border-slate-200 border-t-blue-600 rounded-full"></div>
                     <span class="text-xs text-blue-700">${content}</span>
                 </div>`;
             } else if (type === 'warning' || type === 'error') {

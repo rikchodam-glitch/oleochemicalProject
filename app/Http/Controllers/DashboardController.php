@@ -1,11 +1,15 @@
 <?php
 
-
 namespace App\Http\Controllers;
 
 use App\Models\Asset;
 use App\Models\Employee;
 use App\Models\MaintenanceReport;
+use App\Models\TelegramBotLog;
+use App\Models\TelegramSetting;
+use App\Models\AiProvider;
+use App\Models\AiUsageLog;
+use Carbon\Carbon;
 
 class DashboardController extends Controller
 {
@@ -21,19 +25,44 @@ class DashboardController extends Controller
             ->take(5)
             ->get();
 
-        $assetGroupCount = Asset::select('object_type')
-            ->whereNotNull('object_type')
-            ->groupBy('object_type')
-            ->selectRaw('object_type, count(*) as total')
-            ->orderByDesc('total')
+        // --- DATA BOT TELEGRAM ---
+        $botStatus = TelegramSetting::getValue('bot_status', 'inactive');
+        $todayBotLogs = TelegramBotLog::whereDate('created_at', Carbon::today())
+            ->latest()
+            ->take(10)
             ->get();
+        $todayBotCount = TelegramBotLog::whereDate('created_at', Carbon::today())->count();
+        $todayBotSuccess = TelegramBotLog::whereDate('created_at', Carbon::today())
+            ->where('parsing_status', 'success')->count();
+        $todayBotFailed = TelegramBotLog::whereDate('created_at', Carbon::today())
+            ->where('parsing_status', 'failed')->count();
+
+        // --- DATA AI PROVIDERS ---
+        $aiProviders = AiProvider::orderBy('priority_order')->get();
+        $todayAiLogs = AiUsageLog::with('provider')
+            ->whereDate('created_at', Carbon::today())
+            ->latest()
+            ->take(10)
+            ->get();
+        $todayAiCount = AiUsageLog::whereDate('created_at', Carbon::today())->count();
+        $totalAiTokensToday = AiUsageLog::whereDate('created_at', Carbon::today())->sum('total_tokens');
 
         return view('dashboard', compact(
             'totalAssets',
             'totalEmployees',
             'totalMaintenance',
             'recentReports',
-            'assetGroupCount'
+            // Bot
+            'botStatus',
+            'todayBotLogs',
+            'todayBotCount',
+            'todayBotSuccess',
+            'todayBotFailed',
+            // AI
+            'aiProviders',
+            'todayAiLogs',
+            'todayAiCount',
+            'totalAiTokensToday'
         ));
     }
 }

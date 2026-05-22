@@ -13,12 +13,13 @@ Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
 // Route Asset Manager
 Route::get('/assets', [AssetController::class, 'index'])->name('assets.index');
 Route::post('/assets', [AssetController::class, 'store'])->name('assets.store');
+Route::post('/import-assets', [AssetController::class, 'import'])->name('assets.import');
+Route::post('/import-assets/confirm', [AssetController::class, 'confirmImportUpdate'])->name('assets.import.confirm');
 Route::post('/assets/{id}', [AssetController::class, 'update'])->name('assets.update');
 Route::delete('/assets/{id}', [AssetController::class, 'destroy'])->name('assets.destroy');
 Route::get('/assets/{id}/edit', [AssetController::class, 'edit'])->name('assets.edit');
 Route::get('/export-assets', [AssetController::class, 'export'])->name('assets.export');
 Route::get('/export-template', [AssetController::class, 'exportTemplate'])->name('assets.template');
-Route::post('/import-assets', [AssetController::class, 'import'])->name('assets.import');
 
 // Route API untuk Dropdown
 Route::get('/api/departments/{companyId}', [AssetController::class, 'getDepartments']);
@@ -86,8 +87,8 @@ Route::prefix('ai-providers')->name('ai-providers.')->group(function () {
     Route::get('/', [AiProviderController::class, 'index'])->name('index');
     Route::post('/', [AiProviderController::class, 'store'])->name('store');
     Route::post('{id}/update', [AiProviderController::class, 'update'])->name('update');
-    Route::post('{id}/delete', [AiProviderController::class, 'destroy'])->name('destroy');
-    Route::post('{id}/test', [AiProviderController::class, 'testConnection'])->name('test');
+    Route::get('{id}/delete', [AiProviderController::class, 'destroy'])->name('destroy');
+    Route::get('{id}/test', [AiProviderController::class, 'testConnection'])->name('test');
     Route::post('test-all', [AiProviderController::class, 'testAllConnections'])->name('test-all');
     Route::post('reset-quota', [AiProviderController::class, 'resetMonthlyQuota'])->name('reset-quota');
     Route::post('clean-logs', [AiProviderController::class, 'cleanUsageLogs'])->name('clean-logs');

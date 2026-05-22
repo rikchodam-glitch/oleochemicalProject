@@ -52,7 +52,7 @@
         @endif
 
         <!-- STATS CARDS -->
-        <div class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
+        <div class="grid grid-cols-1 md:grid-cols-6 gap-4 mb-8">
             <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
                 <p class="text-xs font-bold uppercase text-slate-400 tracking-wider">AI Provider</p>
                 <p class="text-lg font-black text-blue-600">{{ count($providers) }}</p>
@@ -67,6 +67,15 @@
                 <p class="text-xs font-bold uppercase text-slate-400 tracking-wider">Total Token</p>
                 <p class="text-lg font-black text-emerald-600">{{ number_format($stats24h['total_tokens']) }}</p>
                 <p class="text-[10px] text-slate-400">~${{ number_format($stats24h['total_cost'], 6) }}</p>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                <p class="text-xs font-bold uppercase text-slate-400 tracking-wider">Sisa Harian</p>
+                @php
+                    $totalDailySisa = collect($providers)->sum('sisa_daily_tokens');
+                    $totalDailyMax = collect($providers)->sum('max_daily_tokens');
+                @endphp
+                <p class="text-lg font-black text-amber-600">{{ number_format($totalDailySisa) }}</p>
+                <p class="text-[10px] text-slate-400">dari {{ number_format($totalDailyMax) }} token/hari</p>
             </div>
             <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
                 <p class="text-xs font-bold uppercase text-slate-400 tracking-wider">Fallback</p>
@@ -90,7 +99,7 @@
                         @csrf
                         <button type="submit" class="bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg text-sm font-bold hover:bg-emerald-200">Test Semua</button>
                     </form>
-                    <form action="{{ route('ai-providers.reset-quota') }}" method="POST" class="inline" onsubmit="return confirm('Reset quota bulanan semua provider?')">
+                    <form action="{{ route('ai-providers.reset-quota') }}" method="POST" class="inline" onsubmit="return confirm('Reset quota bulanan & harian semua provider?')">
                         @csrf
                         <button type="submit" class="bg-amber-100 text-amber-700 px-4 py-2 rounded-lg text-sm font-bold hover:bg-amber-200">Reset Quota</button>
                     </form>
@@ -140,6 +149,18 @@
                         <div class="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
                             <div class="progress-bar h-2.5 rounded-full {{ $p['persen_sisa'] < 10 ? 'bg-red-500' : ($p['persen_sisa'] < 30 ? 'bg-yellow-500' : ($p['persen_sisa'] < 60 ? 'bg-blue-500' : 'bg-green-500')) }}"
                                 style="width: {{ $p['persen_sisa'] }}%"></div>
+                        </div>
+                    </div>
+                    @endif
+                    @if($p['persen_daily_sisa'] !== null)
+                    <div class="mb-3">
+                        <div class="flex justify-between text-[10px] text-slate-500 mb-1">
+                            <span>Sisa <span class="font-bold text-amber-600">HARIAN</span></span>
+                            <span class="font-bold">{{ number_format($p['sisa_daily_tokens']) }}</span>
+                        </div>
+                        <div class="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                            <div class="progress-bar h-2.5 rounded-full {{ $p['persen_daily_sisa'] < 10 ? 'bg-red-500' : ($p['persen_daily_sisa'] < 30 ? 'bg-yellow-500' : ($p['persen_daily_sisa'] < 60 ? 'bg-blue-500' : 'bg-green-500')) }}"
+                                style="width: {{ $p['persen_daily_sisa'] }}%"></div>
                         </div>
                     </div>
                     @endif
@@ -317,7 +338,10 @@
                     <div><label class="block text-xs font-medium text-gray-700 mb-1">Prioritas</label><input type="number" name="priority_order" class="w-full border-gray-300 rounded-lg p-2 border text-sm" value="1" min="1" max="10"></div>
                 </div>
                 <div class="grid grid-cols-2 gap-4 mb-4">
-                    <div><label class="block text-xs font-medium text-gray-700 mb-1">Max Token/Bulan</label><input type="number" name="max_monthly_tokens" class="w-full border-gray-300 rounded-lg p-2 border text-sm" placeholder="50000000" value="50000000"></div>
+                    <div><label class="block text-xs font-medium text-gray-700 mb-1">Max Token/Bulan</label><input type="number" name="max_monthly_tokens" class="w-full border-gray-300 rounded-lg p-2 border text-sm" placeholder="3000000" value="3000000"></div>
+                    <div><label class="block text-xs font-medium text-gray-700 mb-1">Max Token/Hari (TPD)</label><input type="number" name="max_daily_tokens" class="w-full border-gray-300 rounded-lg p-2 border text-sm" placeholder="100000" value="100000"></div>
+                </div>
+                <div class="grid grid-cols-2 gap-4 mb-4">
                     <div><label class="block text-xs font-medium text-gray-700 mb-1">Rate Limit/menit</label><input type="number" name="requests_per_minute" class="w-full border-gray-300 rounded-lg p-2 border text-sm" value="30" min="1"></div>
                 </div>
                 <div class="mb-4"><label class="block text-xs font-medium text-gray-700 mb-1">Custom API URL (opsional)</label><input type="url" name="api_base_url" class="w-full border-gray-300 rounded-lg p-2 border text-sm" placeholder="https://api.groq.com/openai/v1"></div>
@@ -368,6 +392,9 @@
                 </div>
                 <div class="grid grid-cols-2 gap-4 mb-4">
                     <div><label class="block text-xs font-medium text-gray-700 mb-1">Max Token/Bulan</label><input type="number" name="max_monthly_tokens" id="edit_max_tokens" class="w-full border-gray-300 rounded-lg p-2 border text-sm"></div>
+                    <div><label class="block text-xs font-medium text-gray-700 mb-1">Max Token/Hari (TPD)</label><input type="number" name="max_daily_tokens" id="edit_max_daily_tokens" class="w-full border-gray-300 rounded-lg p-2 border text-sm"></div>
+                </div>
+                <div class="grid grid-cols-2 gap-4 mb-4">
                     <div><label class="block text-xs font-medium text-gray-700 mb-1">Rate Limit/menit</label><input type="number" name="requests_per_minute" id="edit_rate_limit" class="w-full border-gray-300 rounded-lg p-2 border text-sm" min="1"></div>
                 </div>
                 <div class="mb-4"><label class="block text-xs font-medium text-gray-700 mb-1">API Base URL (opsional)</label><input type="url" name="api_base_url" id="edit_api_base_url" class="w-full border-gray-300 rounded-lg p-2 border text-sm"></div>
@@ -416,6 +443,7 @@
             document.getElementById('edit_priority').value = provider.priority;
             document.getElementById('edit_is_active').value = provider.is_active ? '1' : '0';
             document.getElementById('edit_max_tokens').value = provider.persen_sisa !== null ? (provider.sisa_tokens + provider.total_tokens) : '';
+            document.getElementById('edit_max_daily_tokens').value = provider.persen_daily_sisa !== null ? (provider.sisa_daily_tokens + provider.current_daily_tokens) : '';
             document.getElementById('edit_rate_limit').value = 30;
             document.getElementById('edit_notes').value = '';
             const modelSelect = document.getElementById('edit_model');

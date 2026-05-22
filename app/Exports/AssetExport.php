@@ -9,14 +9,7 @@ class AssetExport implements WithMultipleSheets
 {
     public function sheets(): array
     {
-        $sheets = [];
-        // Ambil semua tipe barang yang unik untuk dijadikan nama sheet
-        $types = Asset::select('object_type')->distinct()->pluck('object_type');
-
-        foreach ($types as $type) {
-            $sheets[] = new AssetSheetExport($type);
-        }
-
-        return $sheets;
+        // Export semua aset dalam 1 sheet (tanpa grouping tipe)
+        return [new AssetSheetExport(null)];
     }
 }

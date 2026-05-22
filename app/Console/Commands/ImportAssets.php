@@ -40,7 +40,6 @@ class ImportAssets extends Command
 
                 $description   = $row['Description'] ?? null;
                 $techIdentNo   = $row['TechIdentNo.'] ?? null;
-                $objectType    = $row['Object Type'] ?? null;
                 $functionalLoc = $row['Functional Loc.'] ?? '';
 
                 // Logika Auto-Mapping Lokasi
@@ -90,7 +89,6 @@ class ImportAssets extends Command
                     [
                         'description'   => $description,
                         'tech_ident_no' => $techIdentNo,
-                        'object_type'   => $objectType,
                         'company_id'    => $companyId,
                         'department_id' => $deptId,
                         'area_id'       => $areaId,

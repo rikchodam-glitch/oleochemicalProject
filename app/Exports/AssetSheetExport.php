@@ -24,17 +24,17 @@ class AssetSheetExport implements FromQuery, WithTitle, WithHeadings, WithMappin
 
     public function query()
     {
-        return Asset::query()->where('object_type', $this->type);
+        return Asset::query();
     }
 
     public function title(): string
     {
-        return $this->type ?: 'Lainnya';
+        return 'Semua Aset';
     }
 
     public function headings(): array
     {
-        return ["Equipment", "Description", "TechIdentNo.", "Object Type", "Functional Loc."];
+        return ["Equipment", "Description", "TechIdentNo.", "Functional Loc."];
     }
 
     public function map($asset): array
@@ -43,7 +43,6 @@ class AssetSheetExport implements FromQuery, WithTitle, WithHeadings, WithMappin
             $asset->equipment_no,
             $asset->description,
             $asset->tech_ident_no,
-            $asset->object_type,
             collect([$asset->company?->code, $asset->department?->code, $asset->area?->code, $asset->subArea?->code])->filter()->implode('-')
         ];
     }
@@ -53,7 +52,7 @@ class AssetSheetExport implements FromQuery, WithTitle, WithHeadings, WithMappin
         $lastRow = $sheet->getHighestRow();
 
         // Style untuk Header (Baris 1) - Biru Tua, Font Putih, Tebal
-        $sheet->getStyle('A1:E1')->applyFromArray([
+        $sheet->getStyle('A1:D1')->applyFromArray([
             'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
             'fill' => [
                 'fillType' => Fill::FILL_SOLID,
@@ -63,7 +62,7 @@ class AssetSheetExport implements FromQuery, WithTitle, WithHeadings, WithMappin
         ]);
 
         // Tambahkan Border ke seluruh tabel data
-        $sheet->getStyle('A1:E' . $lastRow)->applyFromArray([
+        $sheet->getStyle('A1:D' . $lastRow)->applyFromArray([
             'borders' => [
                 'allBorders' => [
                     'borderStyle' => Border::BORDER_THIN,
@@ -75,7 +74,7 @@ class AssetSheetExport implements FromQuery, WithTitle, WithHeadings, WithMappin
         // Zebra Striping (Baris Genap diberi warna abu-abu muda)
         for ($i = 2; $i <= $lastRow; $i++) {
             if ($i % 2 == 0) {
-                $sheet->getStyle('A' . $i . ':E' . $i)->getFill()
+                $sheet->getStyle('A' . $i . ':D' . $i)->getFill()
                     ->setFillType(Fill::FILL_SOLID)
                     ->getStartColor()->setRGB('F2F2F2');
             }

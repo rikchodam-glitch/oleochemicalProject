@@ -17,7 +17,7 @@ class MaintenanceReportController extends Controller
     // Halaman Manajemen Laporan dengan collapse Tahun > Bulan > Tanggal
     public function index(Request $request)
     {
-        $allAssets = Asset::select('id', 'tech_ident_no', 'object_type', 'description')->get();
+        $allAssets = Asset::select('id', 'tech_ident_no', 'description')->get();
 
         // Filter query
         $query = MaintenanceReport::with(['asset', 'employee']);

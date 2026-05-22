@@ -71,12 +71,19 @@ class AiProviderController extends Controller
             'api_base_url' => 'nullable|url',
             'priority_order' => 'required|integer|min:1|max:10',
             'max_monthly_tokens' => 'nullable|integer|min:0',
+            'max_daily_tokens' => 'nullable|integer|min:0',
             'requests_per_minute' => 'required|integer|min:1|max:10000',
             'notes' => 'nullable|string',
         ]);
 
         // Enkripsi API key
         $validated['api_key'] = Crypt::encryptString($validated['api_key']);
+
+        // Set default daily jika monthly ada tapi daily tidak
+        if (empty($validated['max_daily_tokens']) && !empty($validated['max_monthly_tokens'])) {
+            // Default: daily = monthly / 30
+            $validated['max_daily_tokens'] = (int) round($validated['max_monthly_tokens'] / 30);
+        }
 
         AiProvider::create($validated);
 
@@ -100,6 +107,7 @@ class AiProviderController extends Controller
             'priority_order' => 'required|integer|min:1|max:10',
             'is_active' => 'boolean',
             'max_monthly_tokens' => 'nullable|integer|min:0',
+            'max_daily_tokens' => 'nullable|integer|min:0',
             'requests_per_minute' => 'required|integer|min:1|max:10000',
             'notes' => 'nullable|string',
         ]);
@@ -180,17 +188,19 @@ class AiProviderController extends Controller
     }
 
     /**
-     * Reset counter bulanan
+     * Reset counter bulanan dan harian
      */
     public function resetMonthlyQuota()
     {
         AiProvider::query()->update([
             'current_month_tokens' => 0,
+            'current_daily_tokens' => 0,
             'month_reset_at' => now(),
+            'daily_reset_at' => now(),
         ]);
 
         return redirect()->route('ai-providers.index')
-            ->with('success', "🔄 Quota bulanan semua provider telah di-reset!");
+            ->with('success', "🔄 Quota bulanan & harian semua provider telah di-reset!");
     }
 
     /**
