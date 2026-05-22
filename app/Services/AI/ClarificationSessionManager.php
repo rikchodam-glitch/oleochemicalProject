@@ -25,6 +25,9 @@ class ClarificationSessionManager
 
     /**
      * Buat sesi klarifikasi multi-item baru.
+     * Dua mode:
+     * 1. Dari aiResult (single analyzeWithClarification) + parsedItems
+     * 2. Dari ambiguousItems (array hasil filter analyzeReport)
      */
     public static function createSession(
         int $telegramUserId,
@@ -32,57 +35,82 @@ class ClarificationSessionManager
         array $aiResult,
         ?Employee $employee = null,
         ?string $rawText = null,
-        ?array $parsedItems = null
+        ?array $parsedItems = null,
+        ?array $ambiguousItems = null
     ): array {
         $sessionId = self::generateSessionId($telegramUserId);
         $items = [];
 
-        // Jika dari analyzeWithClarification (single text)
-        $possibleAssets = $aiResult['possible_assets'] ?? [];
-        if (!empty($possibleAssets)) {
-            $items[] = [
-                'raw_text' => $aiResult['normalized_text'] ?? $aiResult['summary'] ?? '',
-                'possible_assets' => $possibleAssets,
-                'clarification_question' => $aiResult['clarification_question'] ?? 'Pilih equipment yang dimaksud:',
-                'status' => 'pending',
-                'attempts' => 0,
-                'max_attempts' => self::MAX_CLARIFICATION_ATTEMPTS,
-                'resolved_asset_id' => null,
-                'resolved_asset_code' => null,
-                'resolved_asset_description' => null,
-                'resolved_location' => null,
-                'notes' => null,
-                'original_action' => null,
-                'original_status' => 'done',
-                'parsed_date' => null,
-                'parsed_shift' => null,
-            ];
+        // MODE 1: Dari ambiguousItems langsung (rekomendasi untuk multi-item)
+        if (!empty($ambiguousItems)) {
+            foreach ($ambiguousItems as $amb) {
+                $items[] = [
+                    'raw_text' => $amb['action'] ?? $amb['raw_text'] ?? '',
+                    'possible_assets' => $amb['possible_assets'] ?? [],
+                    'clarification_question' => $amb['clarification_question'] ?? 'Pilih equipment yang dimaksud:',
+                    'status' => 'pending',
+                    'attempts' => 0,
+                    'max_attempts' => self::MAX_CLARIFICATION_ATTEMPTS,
+                    'resolved_asset_id' => null,
+                    'resolved_asset_code' => null,
+                    'resolved_asset_description' => null,
+                    'resolved_location' => null,
+                    'original_action' => $amb['action'] ?? null,
+                    'original_status' => $amb['status'] ?? 'done',
+                    'notes' => null,
+                    'parsed_date' => $amb['parsed_date'] ?? null,
+                    'parsed_shift' => $amb['parsed_shift'] ?? null,
+                ];
+            }
         }
+        // MODE 2: Dari analyzeWithClarification (single text)
+        else {
+            $possibleAssets = $aiResult['possible_assets'] ?? [];
+            if (!empty($possibleAssets)) {
+                $items[] = [
+                    'raw_text' => $aiResult['normalized_text'] ?? $aiResult['summary'] ?? '',
+                    'possible_assets' => $possibleAssets,
+                    'clarification_question' => $aiResult['clarification_question'] ?? 'Pilih equipment yang dimaksud:',
+                    'status' => 'pending',
+                    'attempts' => 0,
+                    'max_attempts' => self::MAX_CLARIFICATION_ATTEMPTS,
+                    'resolved_asset_id' => null,
+                    'resolved_asset_code' => null,
+                    'resolved_asset_description' => null,
+                    'resolved_location' => null,
+                    'notes' => null,
+                    'original_action' => null,
+                    'original_status' => 'done',
+                    'parsed_date' => null,
+                    'parsed_shift' => null,
+                ];
+            }
 
-        // Jika dari parsed items (report dengan banyak item) - filter yg ambigu
-        if ($parsedItems && $aiResult && isset($aiResult['items'])) {
-            foreach ($aiResult['items'] as $index => $aiItem) {
-                $originalItem = $parsedItems[$index] ?? null;
-                $conf = $aiItem['confidence'] ?? 0;
+            // Dari parsed items — filter yg ambigu
+            if ($parsedItems && $aiResult && isset($aiResult['items'])) {
+                foreach ($aiResult['items'] as $index => $aiItem) {
+                    $originalItem = $parsedItems[$index] ?? null;
+                    $conf = $aiItem['confidence'] ?? 0;
 
-                if ($conf < 0.8 && !empty($aiItem['possible_assets'])) {
-                    $items[] = [
-                        'raw_text' => $originalItem['action'] ?? $aiItem['original_text'] ?? '',
-                        'possible_assets' => $aiItem['possible_assets'] ?? [],
-                        'clarification_question' => $aiItem['clarification_question'] ?? 'Pilih equipment yang dimaksud:',
-                        'status' => 'pending',
-                        'attempts' => 0,
-                        'max_attempts' => self::MAX_CLARIFICATION_ATTEMPTS,
-                        'resolved_asset_id' => null,
-                        'resolved_asset_code' => null,
-                        'resolved_asset_description' => null,
-                        'resolved_location' => null,
-                        'notes' => null,
-                        'original_action' => $originalItem['action'] ?? null,
-                        'original_status' => $originalItem['status'] ?? 'done',
-                        'parsed_date' => $aiResult['parsed_date'] ?? null,
-                        'parsed_shift' => $aiResult['parsed_shift'] ?? null,
-                    ];
+                    if ($conf < 0.8 && !empty($aiItem['possible_assets'])) {
+                        $items[] = [
+                            'raw_text' => $originalItem['action'] ?? $aiItem['original_text'] ?? '',
+                            'possible_assets' => $aiItem['possible_assets'] ?? [],
+                            'clarification_question' => $aiItem['clarification_question'] ?? 'Pilih equipment yang dimaksud:',
+                            'status' => 'pending',
+                            'attempts' => 0,
+                            'max_attempts' => self::MAX_CLARIFICATION_ATTEMPTS,
+                            'resolved_asset_id' => null,
+                            'resolved_asset_code' => null,
+                            'resolved_asset_description' => null,
+                            'resolved_location' => null,
+                            'notes' => null,
+                            'original_action' => $originalItem['action'] ?? null,
+                            'original_status' => $originalItem['status'] ?? 'done',
+                            'parsed_date' => $aiResult['parsed_date'] ?? null,
+                            'parsed_shift' => $aiResult['parsed_shift'] ?? null,
+                        ];
+                    }
                 }
             }
         }
