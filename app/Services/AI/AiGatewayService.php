@@ -113,7 +113,7 @@ class AiGatewayService
 
     /**
      * Prompt khusus untuk klarifikasi — filter asset berdasarkan kata kunci userText.
-     * Hanya kirim 30 asset yang relevan ke AI untuk mengurangi noise.
+     * Kirim 30 asset relevan ke AI. Response HARUS items array (multi-item).
      */
     protected function buildClarificationPrompt(?Employee $employee, string $userText = ''): string
     {
@@ -134,7 +134,6 @@ class AiGatewayService
 
         $allAssets = $query->limit(30)->get();
 
-        // Jika hasil filter kosong, ambil 20 asset random
         if ($allAssets->isEmpty()) {
             $allAssets = Asset::select('id', 'tech_ident_no', 'equipment_no', 'description')
                 ->with(['company:id,name', 'department:id,name', 'area:id,name', 'subArea:id,name'])
@@ -158,13 +157,12 @@ class AiGatewayService
         $assetContext = implode("\n\n", $contextParts);
 
         $prompt = 'Anda adalah asisten pintar untuk sistem laporan maintenance pabrik oleochemical.' . "\n\n";
-        $prompt .= 'Tugas Anda: Menerima SATU ITEM laporan dari teknisi, lalu mencari equipment' . "\n";
-        $prompt .= 'yang PALING COCOK di database.' . "\n\n";
+        $prompt .= 'Tugas Anda: Menerima teks laporan yang berisi BEBERAPA item maintenance,' . "\n";
+        $prompt .= 'lalu untuk SETIAP item, cari equipment yang PALING COCOK di database.' . "\n\n";
         $prompt .= "DATABASE ASSET:\n" . $assetContext . "\n\n";
         $prompt .= 'INSTRUKSI KETAT:' . "\n";
-        $prompt .= '1. Baca teks laporan dengan saksama' . "\n";
-        $prompt .= '2. Identifikasi KATA KUNCI utama dari teks tersebut' . "\n";
-        $prompt .= '3. Cari asset yang JENISNYA SAMA dengan laporan:' . "\n";
+        $prompt .= '1. Baca teks laporan dengan saksama, identifikasi setiap item' . "\n";
+        $prompt .= '2. Untuk SETIAP ITEM: cari equipment di database yang JENISNYA SAMA:' . "\n";
         $prompt .= '   - lampu, TL, LED, penerangan, lighting -> cari kata lampu, TL' . "\n";
         $prompt .= '   - pompa, pump, pumping -> cari pump, pompa' . "\n";
         $prompt .= '   - fan, kipas, blower, exhaust -> cari fan, blower' . "\n";
@@ -172,31 +170,43 @@ class AiGatewayService
         $prompt .= '   - motor, bearing, bearing motor -> cari motor, bearing' . "\n";
         $prompt .= '   - komputer, PC, printer, monitor -> cari IT equipment' . "\n";
         $prompt .= '   - valve, vessel, tangki, tank -> equipment proses' . "\n";
-        $prompt .= '4. JIKA TIDAK ADA KATA KUNCI YANG COCOK, kembalikan possible_assets KOSONG' . "\n";
-        $prompt .= '5. JANGAN PERNAH mengembalikan equipment yang JENISNYA berbeda' . "\n";
-        $prompt .= "   CONTOH: teks bilang 'lampu', jangan kembalikan 'AC' meski lokasi sama" . "\n";
-        $prompt .= "   CONTOH: teks bilang 'pompa', jangan kembalikan 'fan'" . "\n";
-        $prompt .= "   CONTOH: teks bilang 'bearing motor', jangan kembalikan 'AC'" . "\n\n";
+        $prompt .= '3. Jika JENIS equipment tidak sama, jangan dimasukkan ke possible_assets' . "\n";
+        $prompt .= "   CONTOH: teks bilang 'lampu', jangan masukkan 'AC' meskipun lokasinya Lab" . "\n";
+        $prompt .= "   CONTOH: teks bilang 'pompa', jangan masukkan 'fan'" . "\n";
+        $prompt .= "   CONTOH: teks bilang 'bearing motor', jangan masukkan 'AC'" . "\n";
+        $prompt .= '4. Hitung confidence per item: 0.0-1.0' . "\n";
+        $prompt .= '   - >= 0.8: isi suggested_asset_id (numeric) dan suggested_tech_ident_no' . "\n";
+        $prompt .= '   - 0.5-0.79: isi possible_assets dengan opsi-opsi' . "\n";
+        $prompt .= '   - < 0.5: possible_assets = []' . "\n";
+        $prompt .= '5. JIKA TIDAK ADA KATA KUNCI YANG COCOK, possible_assets = []' . "\n\n";
         $prompt .= "FORMAT OUTPUT (JSON WAJIB):\n";
         $prompt .= "{\n";
-        $prompt .= '  "is_ambiguous": true,' . "\n";
-        $prompt .= '  "confidence": 0.0,' . "\n";
-        $prompt .= '  "possible_assets": [' . "\n";
+        $prompt .= '  "items": [' . "\n";
         $prompt .= '    {' . "\n";
-        $prompt .= '      "id": 15,' . "\n";
-        $prompt .= '      "tech_ident_no": "AC-TF-1-1",' . "\n";
-        $prompt .= '      "description": "Lampu TL Lab EPE",' . "\n";
-        $prompt .= '      "location": "PT EPE - QC - Lab - Lt.1",' . "\n";
-        $prompt .= '      "confidence": 0.65' . "\n";
+        $prompt .= '      "original_text": "Perbaiki lampu Lab EPE",' . "\n";
+        $prompt .= '      "action_clean": "Perbaiki lampu Lab EPE",' . "\n";
+        $prompt .= '      "confidence": 0.65,' . "\n";
+        $prompt .= '      "suggested_asset_id": null,' . "\n";
+        $prompt .= '      "suggested_tech_ident_no": null,' . "\n";
+        $prompt .= '      "possible_assets": [' . "\n";
+        $prompt .= '        {' . "\n";
+        $prompt .= '          "id": 15,' . "\n";
+        $prompt .= '          "tech_ident_no": "AC-TF-1-1",' . "\n";
+        $prompt .= '          "description": "Lampu TL Lab EPE",' . "\n";
+        $prompt .= '          "location": "PT EPE - QC - Lab - Lt.1",' . "\n";
+        $prompt .= '          "confidence": 0.65' . "\n";
+        $prompt .= '        }' . "\n";
+        $prompt .= '      ],' . "\n";
+        $prompt .= '      "clarification_question": "Pilih equipment yang dimaksud:",' . "\n";
+        $prompt .= '      "notes": "Penjelasan item ini"' . "\n";
         $prompt .= '    }' . "\n";
         $prompt .= '  ],' . "\n";
-        $prompt .= '  "clarification_question": "Pilih equipment yang dimaksud:",' . "\n";
-        $prompt .= '  "normalized_text": "teks yang sudah dikoreksi",' . "\n";
         $prompt .= '  "summary": "ringkasan analisis"' . "\n";
         $prompt .= '}' . "\n\n";
         $prompt .= 'ATURAN PENTING:' . "\n";
-        $prompt .= '- Jika tidak ada cocok: possible_assets = [], clarification_question = "Tidak ada equipment yang cocok."' . "\n";
-        $prompt .= '- clarification_question dalam Bahasa Indonesia yang ramah' . "\n";
+        $prompt .= '- items adalah ARRAY, jumlahnya sesuai dengan jumlah item laporan' . "\n";
+        $prompt .= '- suggested_asset_id HARUS numeric (integer), null jika tidak yakin' . "\n";
+        $prompt .= '- possible_assets maksimal 5 opsi per item, urut dari confidence tertinggi' . "\n";
         $prompt .= '- Output HANYA JSON, tidak ada teks lain';
 
         return $prompt;
