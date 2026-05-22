@@ -385,6 +385,12 @@ class TelegramBotController extends Controller
 
     /**
      * Handle laporan teks dari user terdaftar
+     * Membedakan:
+     * 1. Report Rangkuman: format "Report shift X\nDD/MM/YYYY\n1. Aksi - done"
+     *    -> AI analisa multiple items, batch 1.A 2.B jika ambigu
+     * 2. Report Harian: teks bebas 1 equipment (tanpa shift/date)
+     *    -> Shift & tanggal otomatis dari jam kirim
+     *    -> AI langsung mapping, simpan, tampilkan ID
      */
     protected function handleReportText(string $text, string $chatId, Employee $employee, TelegramBotLog $log): void
     {
@@ -403,12 +409,196 @@ class TelegramBotController extends Controller
             return;
         }
 
+        // DETEKSI JENIS: Report Rangkuman atau Harian?
+        // Rangkuman: dimulai "Report shift" atau ada format "Report shift X\nDD/MM/YYYY"
+        // Harian: teks biasa (1 equipment)
+        $isRangkuman = preg_match('/^Report\s+shift\s+\d+/i', trim($text));
+
+        if ($isRangkuman) {
+            $this->handleReportRangkuman($text, $chatId, $employee, $log);
+        } else {
+            $this->handleReportHarian($text, $chatId, $employee, $log);
+        }
+    }
+
+    /**
+     * Report Harian — 1 equipment, shift/tanggal auto dari jam kirim
+     */
+    protected function handleReportHarian(string $text, string $chatId, Employee $employee, TelegramBotLog $log): void
+    {
+        $now = now();
+
+        // Tentukan shift berdasarkan jam
+        $hour = (int)$now->format('H');
+        $shift = match(true) {
+            $hour >= 8 && $hour < 16 => '1',
+            $hour >= 16 || $hour < 0 => '2',
+            default => '3', // malam
+        };
+        // Kalau jam 00-08, shift malam, tanggalnya mundur 1 hari? Atau tetap hari ini
+        if ($hour >= 0 && $hour < 8) {
+            $shift = 'Malam';
+        }
+
+        $date = $now;
+
+        $this->telegram->sendMessage($chatId,
+            "📋 <b>Laporan Harian</b>\n" .
+            "Shift: {$shift} | Tanggal: {$date->format('d/m/Y')}\n" .
+            "🧠 Menganalisa..."
+        );
+
+        // Parse teks sebagai 1 item
+        $parsed = [
+            'date' => $date,
+            'shift' => $shift,
+            'items' => [
+                [
+                    'action' => trim($text),
+                    'status' => 'done',
+                ]
+            ],
+            'raw_text' => $text,
+        ];
+
+        // AI mapping untuk 1 item
+        $gateway = new AiGatewayService();
+        $gateway->withContext($employee);
+
+        try {
+            $singleText = "Item 1: " . $text . " (done)";
+            $aiResult = $gateway->analyzeWithClarification($singleText, $employee);
+        } catch (\Throwable $e) {
+            Log::warning("AI Harian gagal: {$e->getMessage()}");
+            $aiResult = null;
+        }
+
+        $resolvedAsset = null;
+
+        if ($aiResult && isset($aiResult['items']) && !empty($aiResult['items'])) {
+            $aiItem = $aiResult['items'][0];
+            $conf = $aiItem['confidence'] ?? 0;
+
+            if ($conf >= 0.8 && !empty($aiItem['suggested_asset_id'])) {
+                $resolvedAsset = \App\Models\Asset::find($aiItem['suggested_asset_id']);
+            }
+        }
+
+        // Jika ada asset, langsung simpan
+        if ($resolvedAsset) {
+            $this->saveSingleReport($parsed, $resolvedAsset, $aiResult, $chatId, $employee, $log);
+        } else {
+            // Ambigu — tampilkan opsi
+            $possibleAssets = $aiResult['items'][0]['possible_assets'] ?? [];
+
+            if (!empty($possibleAssets)) {
+                // Tampilkan opsi
+                $msg = "🤖 <b>Analisa AI</b>\n\n";
+                $msg .= "1. {$text}\n";
+                $msg .= "   Pilih:\n";
+                $letters = ['A', 'B', 'C', 'D', 'E'];
+                foreach ($possibleAssets as $i => $pa) {
+                    $msg .= "   {$letters[$i]}. {$pa['tech_ident_no']} — {$pa['description']}";
+                    if (!empty($pa['location'])) $msg .= " ({$pa['location']})";
+                    $msg .= "\n";
+                }
+                $msg .= "\n📝 Balas: <code>1.A</code> untuk pilih opsi A\n";
+                $msg .= "Atau: <code>lewati</code> untuk skip";
+
+                // Buat session 1 item
+                $session = \App\Services\AI\ClarificationSessionManager::createSession(
+                    (int)$chatId, $chatId, $aiResult ?? [], $employee, $text,
+                    $parsed['items'] ?? null,
+                    [
+                        [
+                            'action' => $text,
+                            'status' => 'done',
+                            'possible_assets' => $possibleAssets,
+                            'clarification_question' => 'Pilih equipment:',
+                            'parsed_date' => $date,
+                            'parsed_shift' => $shift,
+                        ]
+                    ]
+                );
+                $this->telegram->sendMessage($chatId, $msg);
+            } else {
+                // Tidak ada opsi — simpan tanpa asset
+                $this->saveSingleReport($parsed, null, null, $chatId, $employee, $log);
+            }
+        }
+    }
+
+    /**
+     * Simpan 1 report harian langsung
+     */
+    protected function saveSingleReport(array $parsed, ?\App\Models\Asset $asset, ?array $aiResult, string $chatId, Employee $employee, TelegramBotLog $log): void
+    {
+        $dateStr = $parsed['date']->format('Ymd');
+
+        // Generate ID
+        $lastSeq = MaintenanceReport::where('telegram_report_id', 'LIKE', "LMS-{$dateStr}-%")
+            ->orderBy('telegram_report_id', 'desc')
+            ->value('telegram_report_id');
+
+        $nextSeq = 1;
+        if ($lastSeq && preg_match('/-(\d{3})$/', $lastSeq, $m)) {
+            $nextSeq = (int)$m[1] + 1;
+        }
+        $telegramReportId = 'LMS-' . $dateStr . '-' . str_pad($nextSeq, 3, '0', STR_PAD_LEFT);
+
+        DB::beginTransaction();
+        try {
+            $report = MaintenanceReport::create([
+                'asset_id' => $asset ? $asset->id : null,
+                'employee_id' => $employee->id,
+                'raw_text' => $parsed['raw_text'],
+                'action_taken' => $parsed['items'][0]['action'],
+                'status' => $parsed['items'][0]['status'],
+                'report_date' => $parsed['date'],
+                'shift' => $parsed['shift'],
+                'source' => 'telegram',
+                'telegram_report_id' => $telegramReportId,
+                'ai_confidence' => $aiResult['items'][0]['confidence'] ?? null,
+                'ai_suggested' => $asset !== null,
+            ]);
+            DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        $log->update(['maintenance_report_id' => $report->id]);
+
+        $assetName = $asset ? $asset->tech_ident_no : '⚠️ (tidak dikenal)';
+        $confText = $aiResult && isset($aiResult['items'][0]['confidence'])
+            ? ' 🤖' . round($aiResult['items'][0]['confidence'] * 100) . '%'
+            : '';
+
+        // Kirim konfirmasi + ID
+        $response = "✅ <b>Laporan direkam!</b>\n\n";
+        $response .= "Shift: {$parsed['shift']} | {$parsed['date']->format('d/m/Y')}\n";
+        $response .= "Alat: {$assetName}{$confText}\n";
+        $response .= "Aksi: {$parsed['items'][0]['action']}\n\n";
+        $response .= "📸 <b>Kirim foto — salin ID di bawah:</b>\n\n";
+        $response .= "<code>{$telegramReportId}</code>\n\n";
+        $response .= "📌 <b>Cara:</b> Reply pesan ini + attach foto.\n";
+        $response .= "Atau kirim foto dengan caption ID di atas ⬆️";
+
+        $this->telegram->sendMessage($chatId, $response);
+    }
+
+    /**
+     * Report Rangkuman — format "Report shift X\nDD/MM/YYYY\n1. Aksi - done"
+     * Multiple items, AI analisa batch
+     */
+    protected function handleReportRangkuman(string $text, string $chatId, Employee $employee, TelegramBotLog $log): void
+    {
         // Parse teks laporan
         $parsed = $this->parser->parse($text);
 
         if (empty($parsed['items'])) {
             $this->telegram->sendMessage($chatId,
-                "Format laporan tidak dikenali.\n\n" .
+                "Format rangkuman tidak dikenali.\n\n" .
                 "Gunakan format:\n" .
                 "Report shift 1\n" .
                 "DD/MM/YYYY\n" .
@@ -419,11 +609,11 @@ class TelegramBotController extends Controller
         }
 
         $this->telegram->sendMessage($chatId,
-            "📋 Laporan diterima: " . count($parsed['items']) . " item.\n" .
+            "📋 <b>Rangkuman</b> — " . count($parsed['items']) . " item ditemukan.\n" .
             "🧠 AI sedang menganalisa..."
         );
 
-        // PANGGIL AI 1x dengan full teks — AI harus return items + opsi per item
+        // PANGGIL AI 1x dengan full teks
         $gateway = new AiGatewayService();
         $gateway->withContext($employee);
 
@@ -435,13 +625,12 @@ class TelegramBotController extends Controller
         try {
             $aiResult = $gateway->analyzeWithClarification($allItemsText, $employee);
         } catch (\Throwable $e) {
-            Log::warning("AI gagal: {$e->getMessage()}");
+            Log::warning("AI Rangkuman gagal: {$e->getMessage()}");
             $aiResult = null;
         }
 
         $itemsOpsi = [];
 
-        // Process AI result or fallback
         if ($aiResult && isset($aiResult['items']) && !empty($aiResult['items'])) {
             foreach ($aiResult['items'] as $index => $aiItem) {
                 $origItem = $parsed['items'][$index] ?? null;
@@ -449,7 +638,6 @@ class TelegramBotController extends Controller
                 $possibleAssets = $aiItem['possible_assets'] ?? [];
 
                 if ($conf >= 0.8 && !empty($aiItem['suggested_asset_id'])) {
-                    // Resolved — langsung
                     $assetModel = \App\Models\Asset::find($aiItem['suggested_asset_id']);
                     $itemsOpsi[] = [
                         'index' => $index,
@@ -461,7 +649,6 @@ class TelegramBotController extends Controller
                         'description' => $assetModel->description ?? '',
                     ];
                 } else {
-                    // Ambigu — perlu opsi
                     $opsi = [];
                     $letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
                     foreach ($possibleAssets as $paIdx => $pa) {
@@ -483,7 +670,7 @@ class TelegramBotController extends Controller
                 }
             }
         } else {
-            // AI gagal — semua item jadi ambigu tanpa opsi
+            // AI gagal
             foreach ($parsed['items'] as $index => $item) {
                 $itemsOpsi[] = [
                     'index' => $index,
@@ -495,9 +682,9 @@ class TelegramBotController extends Controller
             }
         }
 
-        // BUAT PESAN UNTUK USER — semua item dalam 1 pesan
-        $msg = "🤖 <b>Analisa AI</b>\n\n";
-        $msg .= "Ditemukan " . count($itemsOpsi) . " item:\n\n";
+        // Build pesan
+        $msg = "🤖 <b>Analisa Rangkuman</b>\n\n";
+        $msg .= count($itemsOpsi) . " item:\n\n";
 
         foreach ($itemsOpsi as $io) {
             $num = $io['index'] + 1;
@@ -517,7 +704,6 @@ class TelegramBotController extends Controller
             $msg .= "\n";
         }
 
-        // Petunjuk cara menjawab
         $ambiguousCount = count(array_filter($itemsOpsi, fn($io) => !$io['resolved']));
         if ($ambiguousCount > 0) {
             $msg .= "📝 <b>Cara menjawab:</b>\n";
@@ -528,31 +714,106 @@ class TelegramBotController extends Controller
             $msg .= "⏳ Sisa waktu: 5 menit";
         } else {
             $msg .= "\n✅ Semua item berhasil dikenali! Menyimpan laporan...";
-            $this->processNormalReport($parsed, $text, $chatId, $employee, $log, null);
+            // Simpan langsung
+            $this->processNormalReportForRangkuman($parsed, $text, $chatId, $employee, $log, $aiResult, $itemsOpsi);
             return;
         }
 
-        // Simpan session dengan format baru
+        // Simpan session
         $session = \App\Services\AI\ClarificationSessionManager::createSession(
-            (int)$chatId,
-            $chatId,
-            $aiResult ?? [],
-            $employee,
-            $parsed['raw_text'],
-            $parsed['items'] ?? null
+            (int)$chatId, $chatId, $aiResult ?? [], $employee,
+            $parsed['raw_text'], $parsed['items'] ?? null,
+            array_map(function($io) {
+                return [
+                    'action' => $io['action'],
+                    'status' => $io['status'] ?? 'done',
+                    'possible_assets' => array_map(function($o) {
+                        return [
+                            'id' => $o['id'],
+                            'tech_ident_no' => $o['tech_ident_no'],
+                            'description' => $o['description'],
+                            'location' => $o['location'] ?? '',
+                        ];
+                    }, $io['opsi'] ?? []),
+                    'clarification_question' => 'Pilih equipment:',
+                    'parsed_date' => null, // akan diisi dari session
+                    'parsed_shift' => null,
+                ];
+            }, array_filter($itemsOpsi, fn($io) => !$io['resolved']))
         );
 
-        // Kirim pesan ke user - TANPA keyboard (user ketik manual)
         $this->telegram->sendMessage($chatId, $msg);
     }
 
-      /**
-     * Proses balasan klarifikasi dari user - format: "1.A 2.C 3.B 4.A"
-     * atau "1.A" untuk satu item.
+    /**
+     * Simpan rangkuman yang semua item sudah resolved
      */
-    protected function processClarificationReply(string $text, string $chatId, Employee $employee, TelegramBotLog $log, array $activeSession): void
+    protected function processNormalReportForRangkuman(array $parsed, string $rawText, string $chatId, Employee $employee, TelegramBotLog $log, ?array $aiResult, array $itemsOpsi): void
     {
-        $sessionId = $activeSession['session_id'];
+        $reportIds = [];
+        $dateStr = $parsed['date']->format('Ymd');
+
+        DB::beginTransaction();
+        try {
+            foreach ($itemsOpsi as $io) {
+                $origItem = $parsed['items'][$io['index']] ?? null;
+
+                // Generate ID
+                $lastSeq = MaintenanceReport::where('telegram_report_id', 'LIKE', "LMS-{$dateStr}-%")
+                    ->orderBy('telegram_report_id', 'desc')
+                    ->value('telegram_report_id');
+                $nextSeq = 1;
+                if ($lastSeq && preg_match('/-(\d{3})$/', $lastSeq, $m)) {
+                    $nextSeq = (int)$m[1] + 1;
+                }
+                $telegramReportId = 'LMS-' . $dateStr . '-' . str_pad($nextSeq, 3, '0', STR_PAD_LEFT);
+
+                $report = MaintenanceReport::create([
+                    'asset_id' => $io['resolved'] ? $io['asset_id'] : null,
+                    'employee_id' => $employee->id,
+                    'raw_text' => $rawText,
+                    'action_taken' => $origItem['action'] ?? $io['action'],
+                    'status' => $origItem['status'] ?? 'done',
+                    'report_date' => $parsed['date'],
+                    'shift' => $parsed['shift'],
+                    'source' => 'telegram',
+                    'telegram_report_id' => $telegramReportId,
+                    'ai_confidence' => $aiResult['items'][$io['index']]['confidence'] ?? null,
+                    'ai_suggested' => $io['resolved'],
+                ]);
+                $reportIds[] = $report;
+            }
+            DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        $log->update(['maintenance_report_id' => $reportIds[0]->id ?? null]);
+
+        $response = "✅ <b>Rangkuman tersimpan!</b>\n\n";
+        $response .= "Shift: {$parsed['shift']} | {$parsed['date']->format('d/m/Y')}\n";
+        $response .= "Teknisi: {$employee->name}\n\n";
+
+        foreach ($reportIds as $report) {
+            $assetName = $report->asset ? $report->asset->tech_ident_no : '⚠️ (tidak dikenal)';
+            $response .= "✅ <b>{$report->telegram_report_id}</b>\n";
+            $response .= "   └ {$report->action_taken} → {$assetName}\n\n";
+        }
+
+        $this->telegram->sendMessage($chatId, $response);
+
+        // Kirim daftar ID untuk foto
+        $copyText = "📸 <b>Kirim foto — salin ID di bawah:</b>\n\n";
+        foreach ($reportIds as $report) {
+            $copyText .= "<code>{$report->telegram_report_id}</code>\n";
+        }
+        $copyText .= "\n📌 <b>Cara:</b> Reply pesan ini + attach foto.\n";
+        $copyText .= "Atau kirim foto dengan caption ID di atas ⬆️";
+        $this->telegram->sendMessage($chatId, $copyText);
+    }
+    protected function processClarificationReply(string $text, string $chatId, Employee $employee, TelegramBotLog $log, array $activeSession): void
+    {        $sessionId = $activeSession['session_id'];
         $text = trim($text);
 
         // Cek apakah user mau skip semua
