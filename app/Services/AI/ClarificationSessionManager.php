@@ -425,49 +425,52 @@ class ClarificationSessionManager
 
         foreach ($session['items'] as $item) {
             try {
+                $dateStr = now()->format('Ymd');
+                $lastSeq = MaintenanceReport::where('telegram_report_id', 'LIKE', "LMS-{$dateStr}-%")
+                    ->orderBy('telegram_report_id', 'desc')
+                    ->value('telegram_report_id');
+                $nextSeq = 1;
+                if ($lastSeq && preg_match('/-(\d{3})$/', $lastSeq, $m)) {
+                    $nextSeq = (int)$m[1] + 1;
+                }
+                $telegramReportId = 'LMS-' . $dateStr . '-' . str_pad($nextSeq, 3, '0', STR_PAD_LEFT);
+
                 $reportData = [
                     'employee_id' => $employeeId,
-                    'report_date' => now(),
-                    'shift' => 'pagi',
-                    'is_from_telegram' => true,
-                    'clarification_session_id' => $session['session_id'],
-                    'original_raw_text' => $session['raw_text'] ?? '',
+                    'report_date' => $item['parsed_date'] ?? now(),
+                    'shift' => $item['parsed_shift'] ?? '1',
+                    'source' => 'telegram',
+                    'telegram_report_id' => $telegramReportId,
+                    'raw_text' => $session['raw_text'] ?? '',
                     'action_taken' => $item['raw_text'] ?? '',
                     'notes' => $item['notes'] ?? null,
                 ];
 
-                if (!empty($item['parsed_date'])) {
-                    $reportData['report_date'] = $item['parsed_date'];
-                }
-                if (!empty($item['parsed_shift'])) {
-                    $reportData['shift'] = $item['parsed_shift'];
-                }
-
                 if ($item['status'] === 'resolved') {
                     $reportData['asset_id'] = $item['resolved_asset_id'];
-                    $reportData['asset_code'] = $item['resolved_asset_code'] ?? '';
                     $reportData['status'] = $item['original_status'] ?? 'done';
-                    $reportData['clarification_status'] = 'resolved';
+                    $reportData['ai_suggested'] = true;
                 } elseif ($item['status'] === 'unidentified') {
                     $reportData['asset_id'] = null;
-                    $reportData['asset_code'] = 'UNIDENTIFIED';
                     $reportData['status'] = 'pending';
-                    $reportData['clarification_status'] = 'unidentified';
                     $reportData['notes'] = ($reportData['notes'] ?? '') .
-                        ' | Laporan tidak teridentifikasi setelah klarifikasi. Perlu review admin.';
+                        ' | Laporan tidak teridentifikasi. Perlu review admin.';
+                    $reportData['needs_admin_review'] = true;
                 } else {
                     $reportData['asset_id'] = null;
-                    $reportData['asset_code'] = 'UNIDENTIFIED';
                     $reportData['status'] = 'pending';
-                    $reportData['clarification_status'] = 'unidentified';
                     $reportData['notes'] = ($reportData['notes'] ?? '') .
                         ' | User melewati klarifikasi. Perlu review admin.';
+                    $reportData['needs_admin_review'] = true;
                 }
 
                 $report = MaintenanceReport::create($reportData);
                 $savedReportIds[] = $report?->id;
             } catch (\Throwable $e) {
-                Log::error("Gagal simpan report dari klarifikasi: {$e->getMessage()}");
+                Log::error("Gagal simpan report dari klarifikasi: {$e->getMessage()}", [
+                    'session_id' => $session['session_id'] ?? null,
+                    'item_raw' => $item['raw_text'] ?? null,
+                ]);
             }
         }
 
