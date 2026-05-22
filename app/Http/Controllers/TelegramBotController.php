@@ -396,7 +396,7 @@ class TelegramBotController extends Controller
             return;
         }
 
-        // 🔥 CEK APAKAH USER SEDANG DALAM SESI KLARIFIKASI
+        // Cek apakah user sedang dalam sesi klarifikasi
         $activeSession = \App\Services\AI\ClarificationSessionManager::getActiveSession((int)$chatId);
         if ($activeSession && $activeSession['status'] === 'waiting_user') {
             $this->processClarificationReply($text, $chatId, $employee, $log, $activeSession);
@@ -408,118 +408,112 @@ class TelegramBotController extends Controller
 
         if (empty($parsed['items'])) {
             $this->telegram->sendMessage($chatId,
-                "⚠️ <b>Format laporan tidak dikenali.</b>\n\n" .
+                "Format laporan tidak dikenali.\n\n" .
                 "Gunakan format:\n" .
-                "<code>Report shift 1\n" .
+                "Report shift 1\n" .
                 "DD/MM/YYYY\n" .
                 "1. Aksi perbaikan - done\n" .
-                "2. Aksi lain (continue)</code>\n\n" .
-                "Ketik /help untuk panduan lengkap."
+                "2. Aksi lain (continue)"
             );
             return;
         }
 
-        // 🔥 MINTA AI ANALISA DENGAN analyzeReport (MULTI-ITEM)
-        // Method ini sudah support parsed items + return per-item confidence
+        $this->telegram->sendMessage($chatId,
+            "Laporan diterima: " . count($parsed['items']) . " item ditemukan.\n" .
+            "AI sedang menganalisa..."
+        );
+
+        // Sequential: untuk SETIAP item, kirim ke AI untuk klarifikasi
+        // Item yang langsung yakin (confidence >= 0.8) -> resolved
+        // Item yang ambigu -> masuk session
         $gateway = new AiGatewayService();
         $gateway->withContext($employee);
 
-        $aiItems = [];
-        foreach ($parsed['items'] as $item) {
-            $aiItems[] = ['action' => $item['action'], 'status' => $item['status']];
-        }
-
-        try {
-            $aiResult = $gateway->analyzeReport(
-                $parsed['raw_text'],
-                $aiItems,
-                $employee,
-                $parsed['shift'],
-                $parsed['date']
-            );
-        } catch (\Throwable $e) {
-            Log::warning("AI gagal: {$e->getMessage()}");
-            $aiResult = null;
-        }
-
-        // Filter item mana yang ambigu (confidence < 0.8)
-        $ambiguousItems = [];
+        $clarifyItems = [];
         $resolvedItems = [];
 
-        if ($aiResult && isset($aiResult['items'])) {
-            foreach ($aiResult['items'] as $index => $aiItem) {
-                $originalItem = $parsed['items'][$index] ?? null;
-                $conf = $aiItem['confidence'] ?? 0;
+        foreach ($parsed['items'] as $index => $item) {
+            try {
+                // Kirim SATU ITEM ke AI
+                $singleText = "Item " . ($index + 1) . ": " . $item['action'] . " (" . $item['status'] . ")";
+                $aiResult = $gateway->analyzeWithClarification($singleText, $employee);
 
-                if ($conf >= 0.8 && $aiItem['suggested_asset_id']) {
-                    // Yakin -> tambah ke resolved
-                    $resolvedItems[] = [
-                        'item' => $originalItem,
-                        'ai_item' => $aiItem,
-                        'asset_id' => $aiItem['suggested_asset_id'],
-                    ];
-                } else {
-                    // Ambigu -> perlu klarifikasi
-                    $ambiguousItems[] = [
-                        'index' => $index,
-                        'action' => $originalItem['action'] ?? $aiItem['original_text'] ?? '',
-                        'status' => $originalItem['status'] ?? 'done',
-                        'confidence' => $conf,
-                    ];
+                $confidence = $aiResult['confidence'] ?? 0;
+                $possibleAssets = $aiResult['possible_assets'] ?? [];
+                $isAmbiguous = $aiResult['is_ambiguous'] ?? false;
+
+                // Jika AI yakin dan ada asset_id langsung
+                if ($confidence >= 0.8 && !$isAmbiguous && !empty($aiResult['normalized_text'])) {
+                    // Cari dari possible_assets yang confidence-nya tinggi
+                    $bestAsset = null;
+                    foreach ($possibleAssets as $pa) {
+                        if (($pa['confidence'] ?? 0) >= 0.8) {
+                            $bestAsset = $pa;
+                            break;
+                        }
+                    }
+
+                    if ($bestAsset) {
+                        $resolvedItems[] = [
+                            'item_index' => $index,
+                            'action' => $item['action'],
+                            'status' => $item['status'],
+                            'asset_id' => $bestAsset['id'],
+                            'tech_ident_no' => $bestAsset['tech_ident_no'],
+                            'description' => $bestAsset['description'],
+                            'location' => $bestAsset['location'] ?? '',
+                            'confidence' => $confidence,
+                        ];
+                        continue;
+                    }
                 }
-            }
-        } else {
-            // AI error -> semua item ambigu
-            foreach ($parsed['items'] as $index => $item) {
-                $ambiguousItems[] = [
-                    'index' => $index,
+
+                // Ambigu -> perlu klarifikasi
+                $clarifyItems[] = [
                     'action' => $item['action'],
-                    'status' => $item['status'],
+                    'status' => $item['status'] ?? 'done',
+                    'possible_assets' => $possibleAssets,
+                    'clarification_question' => $aiResult['clarification_question'] ?? 'Pilih equipment yang dimaksud:',
+                    'parsed_date' => $parsed['date'],
+                    'parsed_shift' => $parsed['shift'],
+                    'confidence' => $confidence,
+                ];
+
+            } catch (\Throwable $e) {
+                Log::warning("AI gagal untuk item {$index}: {$e->getMessage()}");
+                // AI error -> jadi unidentified
+                $clarifyItems[] = [
+                    'action' => $item['action'],
+                    'status' => $item['status'] ?? 'done',
+                    'possible_assets' => [],
+                    'clarification_question' => 'AI tidak tersedia. Laporan akan diteruskan ke admin.',
+                    'parsed_date' => $parsed['date'],
+                    'parsed_shift' => $parsed['shift'],
                     'confidence' => 0,
                 ];
             }
         }
 
-        // ✅ Jika semua item resolved -> simpan langsung
-        if (empty($ambiguousItems)) {
-            $this->processNormalReport($parsed, $text, $chatId, $employee, $log, $aiResult);
+        // Kirim konfirmasi item yang langsung resolved
+        if (!empty($resolvedItems)) {
+            $confirmMsg = "Item yang langsung dikenali:\n";
+            foreach ($resolvedItems as $ri) {
+                $confirmMsg .= "- Item {$ri['item_index']}: {$ri['tech_ident_no']} - {$ri['description']}\n";
+            }
+            $this->telegram->sendMessage($chatId, $confirmMsg);
+            // TODO: simpan resolved items ke DB
+        }
+
+        // Jika semua item resolved
+        if (empty($clarifyItems)) {
+            $this->telegram->sendMessage($chatId,
+                "Semua item berhasil dikenali! Laporan tersimpan."
+            );
+            $this->processNormalReport($parsed, $text, $chatId, $employee, $log, null);
             return;
         }
 
-        // 🔥 Ada item ambigu -> minta AI klarifikasi SATU PER SATU
-        // Kirim setiap teks ambigu ke AI untuk dicarikan opsi
-        $clarifyItems = [];
-
-        foreach ($ambiguousItems as $amb) {
-            try {
-                $clarifyResult = $gateway->analyzeWithClarification($amb['action'], $employee);
-
-                // Ambil possible_assets dari hasil AI
-                $possibleAssets = $clarifyResult['possible_assets'] ?? [];
-                $clarifyQuestion = $clarifyResult['clarification_question'] ?? 'Pilih equipment yang dimaksud:';
-
-                $clarifyItems[] = [
-                    'action' => $amb['action'],
-                    'status' => $amb['status'] ?? 'done',
-                    'possible_assets' => $possibleAssets,
-                    'clarification_question' => $clarifyQuestion,
-                    'parsed_date' => $parsed['date'],
-                    'parsed_shift' => $parsed['shift'],
-                ];
-            } catch (\Throwable $e) {
-                // Jika AI error untuk item ini, skip jadi unidentified
-                $clarifyItems[] = [
-                    'action' => $amb['action'],
-                    'status' => $amb['status'] ?? 'done',
-                    'possible_assets' => [],
-                    'clarification_question' => 'AI tidak tersedia. Laporan diteruskan ke admin.',
-                    'parsed_date' => $parsed['date'],
-                    'parsed_shift' => $parsed['shift'],
-                ];
-            }
-        }
-
-        // Buat session multi-item dari hasil klarifikasi
+        // Buat session multi-item untuk item ambigu
         $session = \App\Services\AI\ClarificationSessionManager::createSession(
             (int)$chatId,
             $chatId,
@@ -527,8 +521,17 @@ class TelegramBotController extends Controller
             $employee,
             $parsed['raw_text'],
             $parsed['items'] ?? null,
-            $clarifyItems // ambiguousItems dengan possible_assets
+            $clarifyItems
         );
+
+        if (empty($session) || empty($session['items'])) {
+            $this->processNormalReport($parsed, $text, $chatId, $employee, $log, null);
+            return;
+        }
+
+        // Kirim item pertama ke user
+        $currentItem = \App\Services\AI\ClarificationSessionManager::getCurrentItem($session);
+        $msg = \App\Services\AI\ClarificationSessionManager::buildClarificationMessage($session, $currentItem);
 
         if (empty($session) || empty($session['items'])) {
             // Fallback — simpan langsung
