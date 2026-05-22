@@ -36,6 +36,7 @@ class AiGatewayService
 
     /**
      * Main method: analisa laporan dengan AI, otomatis fallback ke provider berikutnya
+     * Untuk report manager (existing flow - langsung mapping ke asset)
      */
     public function analyzeReport(string $rawText, array $parsedItems, Employee $employee, string $shift, Carbon $date): array
     {
@@ -72,7 +73,125 @@ class AiGatewayService
             'fallback_chain' => $result['fallback_chain'],
             'processing_time_ms' => $result['processing_time_ms'],
             'new_aliases' => $aiData['new_aliases'] ?? [],
+            'is_ambiguous' => $aiData['is_ambiguous'] ?? false,
+            'possible_assets' => $aiData['possible_assets'] ?? [],
+            'clarification_question' => $aiData['clarification_question'] ?? null,
         ];
+    }
+
+    /**
+     * Mode klarifikasi: AI menganalisa laporan ambigu untuk Telegram Bot.
+     * Jika confidence < 80% -> return opsi-opsi yang mungkin.
+     * Jika lokasi tidak disebut -> tampilkan opsi dari semua kemungkinan.
+     */
+    public function analyzeWithClarification(string $userText, ?Employee $employee = null): array
+    {
+        $systemPrompt = $this->buildClarificationPrompt($employee);
+        $userPrompt = "Laporan: {$userText}\n\nAnalisa dan berikan opsi terbaik.";
+
+        $result = $this->analyze($systemPrompt, $userPrompt, [
+            'temperature' => 0.15,
+            'max_tokens' => 1024,
+        ]);
+
+        if (!$result['success']) {
+            return [
+                'success' => false,
+                'error' => 'AI tidak tersedia: ' . ($result['error'] ?? 'Unknown'),
+                'fallback_chain' => $result['fallback_chain'],
+            ];
+        }
+
+        $data = $result['data'];
+        $data['provider_used'] = $result['provider_used'];
+        $data['fallback_chain'] = $result['fallback_chain'];
+        $data['processing_time_ms'] = $result['processing_time_ms'];
+
+        return $data;
+    }
+
+    /**
+     * Prompt khusus untuk klarifikasi - AI diminta deteksi ambiguity
+     * dan berikan opsi konkret dari database
+     */
+    protected function buildClarificationPrompt(?Employee $employee): string
+    {
+        $allAssets = Asset::select('id', 'tech_ident_no', 'equipment_no', 'description')
+            ->with(['company:id,name', 'department:id,name', 'area:id,name', 'subArea:id,name'])
+            ->limit(150)
+            ->get()
+            ->groupBy(function($a) { return $a->company->name ?? 'Unknown'; });
+
+        $contextParts = [];
+        foreach ($allAssets as $companyName => $companyAssets) {
+            $items = $companyAssets->map(function($a) {
+                $loc = $a->department->name ?? '-';
+                $loc .= ' / ' . ($a->area->name ?? '-');
+                $loc .= ' / ' . ($a->subArea->name ?? '-');
+                return "  - [{$a->id}] {$a->tech_ident_no} - {$a->description} ($loc)";
+            })->implode("\n");
+            $contextParts[] = "=== {$companyName} ===\n{$items}";
+        }
+        $assetContext = implode("\n\n", $contextParts);
+
+        $prompt = "Anda adalah asisten pintar untuk sistem laporan maintenance pabrik oleochemical.
+Tugas Anda: menerima laporan mentah dari teknisi, lalu menentukan apakah laporan tersebut bisa langsung dicocokkan dengan asset database.
+
+DATABASE ASSET:
+{$assetContext}
+
+INSTRUKSI:
+1. Baca laporan teknisi dengan seksama
+2. Identifikasi apakah laporan menyebutkan:
+   a. Equipment/lokasi yang jelas (bisa langsung cocokkan)
+   b. Equipment yang ambigu (banyak kemungkinan)
+   c. Lokasi TIDAK disebut sama sekali
+
+3. Hitung confidence (0.0 - 1.0):
+   - >= 0.8: yakin, bisa langsung simpan
+   - 0.5 - 0.79: agak yakin, tapi perlu klarifikasi
+   - < 0.5: tidak yakin, perlu klarifikasi
+
+4. Jika laporan menyebutkan lokasi secara spesifik (nama PT, Dept, Area):
+   - Cari asset yang cocok di lokasi tersebut
+   - Berikan opsi yang relevan
+
+5. Jika laporan TIDAK menyebutkan lokasi sama sekali:
+   - Cari asset dari SEMUA lokasi
+   - Tampilkan maksimal 5 opsi terbaik
+
+6. Jika benar-benar tidak ada yang cocok:
+   - is_ambiguous = true
+   - possible_assets = []
+   - clarification_question = 'Tidak ditemukan equipment yang cocok. Jelaskan lebih detail.'
+
+FORMAT OUTPUT (JSON WAJIB):
+{
+  'is_ambiguous': true/false,
+  'confidence': 0.0-1.0,
+  'possible_assets': [
+    {
+      'id': 15,
+      'tech_ident_no': 'AC-TF-1-1',
+      'description': 'Lampu TL Lab EPE',
+      'location': 'PT EPE - QC - Lab - Lt.1',
+      'confidence': 0.65
+    }
+  ],
+  'clarification_question': 'Pertanyaan klarifikasi yang akan dikirim ke user...',
+  'new_aliases': [],
+  'normalized_text': 'Teks laporan yang sudah dikoreksi ejaan',
+  'summary': 'Ringkasan analisis...'
+}
+
+ATURAN PENTING:
+- possible_assets: maksimal 5 opsi, urutkan dari confidence tertinggi
+- clarification_question HARUS dalam Bahasa Indonesia yang ramah
+- Jika confidence >= 0.8: is_ambiguous = false, isi langsung asset_id
+- Jika ada alias yang cocok dari database, prioritaskan
+- Output HANYA JSON, tidak ada teks lain";
+
+        return $prompt;
     }
 
     /**
