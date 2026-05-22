@@ -533,16 +533,6 @@ class TelegramBotController extends Controller
         $currentItem = \App\Services\AI\ClarificationSessionManager::getCurrentItem($session);
         $msg = \App\Services\AI\ClarificationSessionManager::buildClarificationMessage($session, $currentItem);
 
-        if (empty($session) || empty($session['items'])) {
-            // Fallback — simpan langsung
-            $this->processNormalReport($parsed, $text, $chatId, $employee, $log, $aiResult);
-            return;
-        }
-
-        // Kirim item pertama ke user
-        $currentItem = \App\Services\AI\ClarificationSessionManager::getCurrentItem($session);
-        $msg = \App\Services\AI\ClarificationSessionManager::buildClarificationMessage($session, $currentItem);
-
         if (!empty($currentItem['possible_assets'])) {
             $buttons = \App\Services\AI\ClarificationSessionManager::buildClarificationKeyboard($session, $currentItem);
             $this->telegram->sendMessageWithKeyboard($chatId, $msg, $buttons);
