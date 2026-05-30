@@ -195,32 +195,29 @@
                                     @php
                                         $hasAiData = $report->ai_provider_used || $report->ai_notes || $report->ai_suggested || $report->ai_confidence !== null;
 
-                                        // Bangun title tooltip
-                                        $aiTitle = '';
-                                        if ($report->ai_provider_used) $aiTitle .= 'Provider: ' . $report->ai_provider_used;
-                                        if ($report->ai_confidence !== null) $aiTitle .= ' | Confidence: ' . round($report->ai_confidence * 100) . '%';
-                                        if ($report->ai_notes) $aiTitle .= ' | Catatan: ' . $report->ai_notes;
+                                        // Build AI info for popup
+                                        $aiBtnClass = 'text-slate-300';
+                                        $aiBtnText = '-';
+                                        if ($report->ai_suggested && $report->ai_confidence !== null && $report->ai_confidence >= 0.8) {
+                                            $aiBtnClass = 'bg-sky-100 text-sky-700 hover:bg-sky-200';
+                                            $aiBtnText = 'AI';
+                                        } elseif ($report->ai_suggested && $report->ai_confidence !== null && $report->ai_confidence >= 0.5) {
+                                            $aiBtnClass = 'bg-amber-100 text-amber-700 hover:bg-amber-200';
+                                            $aiBtnText = 'AI';
+                                        } elseif ($report->needs_admin_review || $report->ai_suggested) {
+                                            $aiBtnClass = 'bg-red-100 text-red-700 hover:bg-red-200';
+                                            $aiBtnText = 'Review';
+                                        } elseif ($hasAiData) {
+                                            $aiBtnClass = 'bg-slate-100 text-slate-600 hover:bg-slate-200';
+                                            $aiBtnText = 'AI';
+                                        }
                                     @endphp
-                                    @if($report->ai_suggested && $report->ai_confidence !== null && $report->ai_confidence >= 0.8)
-                                        <span class="text-[11px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-md font-medium cursor-help"
-                                            title="{{ $aiTitle }}">
-                                            AI
-                                        </span>
-                                    @elseif($report->ai_suggested && $report->ai_confidence !== null && $report->ai_confidence >= 0.5)
-                                        <span class="text-[11px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-md font-medium cursor-help"
-                                            title="{{ $aiTitle }}">
-                                            AI
-                                        </span>
-                                    @elseif($report->needs_admin_review || $report->ai_suggested)
-                                        <span class="text-[11px] bg-red-100 text-red-700 px-2 py-0.5 rounded-md font-medium cursor-help"
-                                            title="{{ $aiTitle ?: 'Perlu review admin' }}">
-                                            Review
-                                        </span>
-                                    @elseif($hasAiData)
-                                        <span class="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-medium cursor-help"
-                                            title="{{ $aiTitle }}">
-                                            AI
-                                        </span>
+                                    @if($hasAiData)
+                                        <button onclick="showAiProcessModal({{ json_encode(['id' => $report->id, 'asset_code' => $report->asset->tech_ident_no ?? '-', 'asset_description' => $report->asset->description ?? '', 'employee_name' => $report->employee->name ?? '-', 'action_taken' => $report->action_taken ?: $report->raw_text, 'ai_provider' => $report->ai_provider_used ?? '-', 'ai_confidence' => $report->ai_confidence !== null ? round($report->ai_confidence * 100) : null, 'ai_suggested' => $report->ai_suggested, 'needs_review' => $report->needs_admin_review, 'ai_notes' => $report->ai_notes ?? '', 'ai_fallback_reason' => $report->ai_fallback_reason ?? '', 'shift' => $report->shift, 'status' => $report->status, 'report_date' => date('d/m/Y', strtotime($report->report_date))]) }})"
+                                            class="text-[11px] px-2 py-0.5 rounded-md font-bold cursor-pointer transition-all hover:scale-105 {{ $aiBtnClass }}"
+                                            title="Klik untuk lihat detail proses AI">
+                                            {{ $aiBtnText }}
+                                        </button>
                                     @else
                                         <span class="text-[10px] text-slate-300">-</span>
                                     @endif
@@ -482,6 +479,19 @@
         </div>
     </div>
 
+    <!-- ==================== MODAL PROSES AI LAPORAN ==================== -->
+    <div id="aiProcessModal" class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-lg w-full max-w-3xl p-6 relative max-h-[90vh] overflow-y-auto border border-slate-200">
+            <button onclick="closeAiProcessModal()" class="absolute top-4 right-4 text-gray-500 hover:text-red-500 text-2xl font-bold z-10">&times;</button>
+            <h3 class="text-xl font-bold mb-4 flex items-center gap-2">
+                <span>🧠</span> Proses AI: <span id="aiProcessTitle" class="text-blue-600">Laporan</span>
+            </h3>
+            <div id="aiProcessContent" class="space-y-3 text-sm">
+                <p class="text-slate-400">Memuat data...</p>
+            </div>
+        </div>
+    </div>
+
     <script>
         // === LOAD EMPLOYEES ===
         async function loadEmployees(selectId, selectedId = null) {
@@ -511,30 +521,19 @@
         }
 
         // === SEARCH / FILTER ASSETS (untuk modal create) ===
-        function filterAssets(searchText, containerId, groupClass) {
+        function filterAssets(searchText, containerId) {
             const container = document.getElementById(containerId);
             if (!container) return;
-            const groups = container.querySelectorAll('.' + groupClass);
+            const items = container.querySelectorAll('.asset-item');
             const q = searchText.toLowerCase().trim();
-            groups.forEach(group => {
-                const items = group.querySelectorAll('.asset-item');
-                let anyVisible = false;
-                items.forEach(item => {
-                    const name = item.querySelector('.asset-name')?.textContent?.toLowerCase() || '';
-                    const desc = item.querySelector('.asset-desc')?.textContent?.toLowerCase() || '';
-                    const match = q === '' || name.includes(q) || desc.includes(q);
-                    item.style.display = match ? '' : 'none';
-                    if (match) anyVisible = true;
-                });
-                group.style.display = anyVisible || q === '' ? '' : 'none';
-                const count = q === '' ? items.length : group.querySelectorAll('.asset-item:not([style*="display: none"])').length;
-                const badge = group.querySelector('.group-count');
-                if (badge) badge.textContent = count;
-                const details = group.tagName === 'DETAILS' ? group : null;
-                if (details && q !== '' && anyVisible) details.setAttribute('open', '');
+            items.forEach(item => {
+                const name = item.querySelector('.asset-name')?.textContent?.toLowerCase() || '';
+                const desc = item.querySelector('.asset-desc')?.textContent?.toLowerCase() || '';
+                const match = q === '' || name.includes(q) || desc.includes(q);
+                item.style.display = match ? '' : 'none';
             });
         }
-        function filterCreateAssets(val) { filterAssets(val, 'create_asset_container', 'create-asset-group'); }
+        function filterCreateAssets(val) { filterAssets(val, 'create_asset_container'); }
 
         // === MODAL EDIT ===
         async function openEditModal(id) {
@@ -590,31 +589,30 @@
             });
         });
 
+        // Escape key untuk tutup modal AI
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                document.querySelectorAll('.fixed.inset-0:not(.hidden)').forEach(function(m) {
+                    m.classList.add('hidden');
+                    m.classList.remove('flex');
+                });
+            }
+        });
+
         // === SEARCH / FILTER ASSETS (untuk modal edit) ===
-        function filterAssets(searchText, containerId, groupClass) {
+        function filterAssets(searchText, containerId) {
             const container = document.getElementById(containerId);
             if (!container) return;
-            const groups = container.querySelectorAll('.' + groupClass);
+            const items = container.querySelectorAll('.asset-item');
             const q = searchText.toLowerCase().trim();
-            groups.forEach(group => {
-                const items = group.querySelectorAll('.asset-item');
-                let anyVisible = false;
-                items.forEach(item => {
-                    const name = item.querySelector('.asset-name')?.textContent?.toLowerCase() || '';
-                    const desc = item.querySelector('.asset-desc')?.textContent?.toLowerCase() || '';
-                    const match = q === '' || name.includes(q) || desc.includes(q);
-                    item.style.display = match ? '' : 'none';
-                    if (match) anyVisible = true;
-                });
-                group.style.display = anyVisible || q === '' ? '' : 'none';
-                const count = q === '' ? items.length : group.querySelectorAll('.asset-item:not([style*="display: none"])').length;
-                const badge = group.querySelector('.group-count');
-                if (badge) badge.textContent = count;
-                const details = group.tagName === 'DETAILS' ? group : null;
-                if (details && q !== '' && anyVisible) details.setAttribute('open', '');
+            items.forEach(item => {
+                const name = item.querySelector('.asset-name')?.textContent?.toLowerCase() || '';
+                const desc = item.querySelector('.asset-desc')?.textContent?.toLowerCase() || '';
+                const match = q === '' || name.includes(q) || desc.includes(q);
+                item.style.display = match ? '' : 'none';
             });
         }
-        function filterEditAssets(val) { filterAssets(val, 'edit_asset_container', 'edit-asset-group'); }
+        function filterEditAssets(val) { filterAssets(val, 'edit_asset_container'); }
 
         // === FILTER LAPORAN berdasarkan tanggal (sidebar click) ===
         let activeDate = null;
@@ -853,8 +851,160 @@
             const radio = container.querySelector('input[type="radio"][value="' + assetId + '"]');
             if (radio) {
                 radio.checked = true;
-                radio.closest('.asset-item')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const item = radio.closest('.asset-item');
+                if (item) {
+                    item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    item.classList.add('ring-2', 'ring-blue-400', 'bg-blue-50');
+                    setTimeout(() => item.classList.remove('ring-2', 'ring-blue-400'), 2000);
+                }
             }
+        }
+
+        // Ketika user klik label asset di daftar, langsung scroll ke item
+        document.querySelectorAll('#create_asset_container, #edit_asset_container').forEach(function(cont) {
+            cont.addEventListener('click', function(e) {
+                const label = e.target.closest('.asset-item');
+                if (label) {
+                    const radio = label.querySelector('input[type="radio"]');
+                    if (radio) radio.checked = true;
+                }
+            });
+        });
+
+        // =============================================
+        // === AI PROCESS MODAL (POPUP AUDIT) ===
+        // =============================================
+        const reportAuditData = @json($reportAuditJson ?? []);
+
+        function showAiProcessModal(aiInfo) {
+            const modal = document.getElementById('aiProcessModal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+
+            document.getElementById('aiProcessTitle').textContent = 'Laporan #' + aiInfo.id + ' - ' + (aiInfo.asset_code || '');
+
+            let html = '';
+
+            // ===== BAGIAN 1: Data Laporan =====
+            html += '<div class="bg-blue-50 border border-blue-200 rounded-lg p-3">';
+            html += '<p class="text-[10px] font-bold uppercase text-blue-600 mb-1">📝 Teks Laporan / Tindakan</p>';
+            html += '<p class="text-sm font-mono bg-white rounded p-2 border border-blue-100">' + (aiInfo.action_taken || '-') + '</p>';
+            html += '</div>';
+
+            // Grid info utama
+            const conf = aiInfo.ai_confidence;
+            let confColor = 'text-slate-600';
+            if (conf !== null) {
+                confColor = conf >= 80 ? 'text-green-600' : (conf >= 50 ? 'text-amber-600' : 'text-red-600');
+            }
+            let statusBadge = '';
+            if (aiInfo.needs_review) { statusBadge = '<span class="text-[11px] bg-red-100 text-red-700 px-2 py-0.5 rounded font-bold">Perlu Review</span>'; }
+            else if (aiInfo.ai_suggested && conf !== null && conf >= 80) { statusBadge = '<span class="text-[11px] bg-green-100 text-green-700 px-2 py-0.5 rounded font-bold">Disarankan AI ✓</span>'; }
+            else if (aiInfo.ai_suggested) { statusBadge = '<span class="text-[11px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-bold">Saran AI</span>'; }
+            else { statusBadge = '<span class="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-bold">Manual</span>'; }
+
+            html += '<div class="grid grid-cols-2 md:grid-cols-4 gap-2">';
+            html += '<div class="bg-white border border-slate-200 rounded-lg p-3"><p class="text-[9px] font-bold uppercase text-slate-400">Asset</p><p class="text-sm font-bold text-blue-600">' + (aiInfo.asset_code || '-') + '</p><p class="text-[10px] text-slate-500 truncate">' + (aiInfo.asset_description || '') + '</p></div>';
+            html += '<div class="bg-white border border-slate-200 rounded-lg p-3"><p class="text-[9px] font-bold uppercase text-slate-400">Confidence AI</p><p class="text-lg font-black ' + confColor + '">' + (conf !== null ? conf + '%' : 'N/A') + '</p></div>';
+            html += '<div class="bg-white border border-slate-200 rounded-lg p-3"><p class="text-[9px] font-bold uppercase text-slate-400">AI Provider</p><p class="text-sm font-bold break-all">' + (aiInfo.ai_provider || '-') + '</p></div>';
+            html += '<div class="bg-white border border-slate-200 rounded-lg p-3"><p class="text-[9px] font-bold uppercase text-slate-400">Status AI</p><p>' + statusBadge + '</p></div>';
+            html += '<div class="bg-white border border-slate-200 rounded-lg p-3"><p class="text-[9px] font-bold uppercase text-slate-400">Tanggal</p><p class="text-sm font-bold">' + (aiInfo.report_date || '-') + '</p></div>';
+            html += '<div class="bg-white border border-slate-200 rounded-lg p-3"><p class="text-[9px] font-bold uppercase text-slate-400">Shift</p><p class="text-sm font-bold">' + (aiInfo.shift || '-') + '</p></div>';
+            html += '<div class="bg-white border border-slate-200 rounded-lg p-3"><p class="text-[9px] font-bold uppercase text-slate-400">Status Laporan</p><p class="text-sm font-bold">' + (aiInfo.status || '-') + '</p></div>';
+            html += '<div class="bg-white border border-slate-200 rounded-lg p-3"><p class="text-[9px] font-bold uppercase text-slate-400">Teknisi</p><p class="text-sm font-bold">' + (aiInfo.employee_name || '-') + '</p></div>';
+            html += '</div>';
+
+            // ===== BAGIAN 2: Catatan AI =====
+            if (aiInfo.ai_notes) {
+                html += '<div class="bg-slate-100 border border-slate-200 rounded-lg p-3">';
+                html += '<p class="text-[10px] font-bold uppercase text-slate-500 mb-1">📋 Catatan AI</p>';
+                html += '<p class="text-sm text-slate-700">' + aiInfo.ai_notes + '</p>';
+                html += '</div>';
+            }
+
+            if (aiInfo.ai_fallback_reason) {
+                html += '<div class="bg-amber-50 border border-amber-200 rounded-lg p-3">';
+                html += '<p class="text-[10px] font-bold uppercase text-amber-600 mb-1">⚠️ Fallback Reason</p>';
+                html += '<p class="text-sm text-amber-700">' + aiInfo.ai_fallback_reason + '</p>';
+                html += '</div>';
+            }
+
+            // ===== BAGIAN 3: Data Audit Log (jika ada yang cocok) =====
+            // Cari audit log yang cocok berdasarkan teks
+            const matchedAudit = reportAuditData.find(function(a) {
+                return a.original_text && aiInfo.action_taken &&
+                       (a.original_text.trim().toLowerCase() === aiInfo.action_taken.trim().toLowerCase() ||
+                        a.original_text.trim().toLowerCase().includes(aiInfo.action_taken.trim().toLowerCase()) ||
+                        aiInfo.action_taken.trim().toLowerCase().includes(a.original_text.trim().toLowerCase()));
+            });
+
+            if (matchedAudit) {
+                html += '<div class="border-t border-slate-200 pt-2">';
+                html += '<p class="text-[11px] font-bold uppercase text-purple-600 mb-2">🔍 Detail Proses AI (Audit Log)</p>';
+
+                // Area
+                html += '<div class="grid grid-cols-2 md:grid-cols-4 gap-2">';
+                html += '<div class="bg-purple-50 border border-purple-200 rounded-lg p-3"><p class="text-[9px] font-bold uppercase text-purple-500">Area Dari Teks</p><p class="text-sm font-bold">' + (matchedAudit.area_detected || 'Tidak ada') + '</p></div>';
+                html += '<div class="bg-purple-50 border border-purple-200 rounded-lg p-3"><p class="text-[9px] font-bold uppercase text-purple-500">Area Asset</p><p class="text-sm font-bold">' + (matchedAudit.area_asset || 'Tidak diketahui') + '</p></div>';
+                html += '<div class="bg-purple-50 border border-purple-200 rounded-lg p-3"><p class="text-[9px] font-bold uppercase text-purple-500">Area Cocok?</p><p class="text-sm font-bold ' + (matchedAudit.area_match ? 'text-green-600' : 'text-red-600') + '">' + (matchedAudit.area_match ? '✅ YA' : '❌ TIDAK') + '</p></div>';
+                html += '<div class="bg-purple-50 border border-purple-200 rounded-lg p-3"><p class="text-[9px] font-bold uppercase text-purple-500">Waktu / Oleh</p><p class="text-sm font-bold">' + (matchedAudit.telegram_username || matchedAudit.employee_name || '-') + '</p><p class="text-[10px] text-slate-400">' + (matchedAudit.occurred_at || '') + '</p></div>';
+                html += '</div>';
+
+                // Keywords
+                if (matchedAudit.keywords_used && matchedAudit.keywords_used.length > 0) {
+                    html += '<div class="bg-amber-50 border border-amber-200 rounded-lg p-3">';
+                    html += '<p class="text-[10px] font-bold uppercase text-amber-600 mb-1">🏷️ Keyword yang Diekstrak</p>';
+                    html += '<div class="flex flex-wrap gap-1">';
+                    matchedAudit.keywords_used.forEach(function(kw) {
+                        html += '<span class="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-mono border border-amber-300">' + kw + '</span>';
+                    });
+                    html += '</div></div>';
+                }
+
+                // Opsi AI
+                if (matchedAudit.ai_possible_assets && matchedAudit.ai_possible_assets.length > 0) {
+                    html += '<div class="bg-purple-50 border border-purple-200 rounded-lg p-3">';
+                    html += '<p class="text-[10px] font-bold uppercase text-purple-600 mb-1">🎯 Opsi yang Dipertimbangkan AI</p>';
+                    html += '<div class="space-y-1.5">';
+                    matchedAudit.ai_possible_assets.forEach(function(opt, i) {
+                        var letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+                        var letter = letters[i] || '?';
+                        var pct = Math.round((opt.confidence || 0) * 100);
+                        html += '<div class="flex items-center justify-between bg-white rounded p-2 border border-purple-100 hover:bg-purple-50/50">';
+                        html += '<div class="flex items-center gap-2"><span class="font-bold text-purple-700 text-xs bg-purple-100 w-5 h-5 rounded-full flex items-center justify-center">' + letter + '</span> ';
+                        html += '<span class="text-xs font-mono font-bold">' + (opt.tech_ident_no || '-') + '</span>';
+                        html += '<span class="text-[10px] text-slate-500">' + (opt.description || '') + '</span>';
+                        if (opt.location) html += ' <span class="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-500">' + opt.location + '</span>';
+                        html += '</div>';
+                        html += '<span class="text-xs font-bold px-2 py-0.5 rounded ' + (pct >= 80 ? 'bg-green-100 text-green-700' : (pct >= 50 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700')) + '">' + pct + '%</span>';
+                        html += '</div>';
+                    });
+                    html += '</div></div>';
+                }
+
+                // AI Reasoning
+                if (matchedAudit.ai_reasoning) {
+                    html += '<div class="bg-slate-100 border border-slate-200 rounded-lg p-3">';
+                    html += '<p class="text-[10px] font-bold uppercase text-slate-500 mb-1">💡 Alasan AI</p>';
+                    html += '<p class="text-sm text-slate-600 italic bg-white rounded p-2 border border-slate-200">"' + matchedAudit.ai_reasoning + '"</p>';
+                    html += '</div>';
+                }
+
+                html += '</div>';
+            } else if (aiInfo.ai_notes || aiInfo.ai_provider !== '-' || conf !== null) {
+                // Jika tidak ada audit log tapi ada data AI, tampilkan info bahwa tidak ada audit detail
+                html += '<div class="bg-slate-50 border border-slate-200 rounded-lg p-3">';
+                html += '<p class="text-[10px] font-bold uppercase text-slate-400 mb-1">ℹ️ Informasi</p>';
+                html += '<p class="text-xs text-slate-500">Data ini berasal dari laporan yang diproses AI. Detail lengkap proses AI (keyword, area, opsi) hanya tersedia jika laporan dibuat melalui Telegram Bot dengan fitur audit log aktif.</p>';
+                html += '</div>';
+            }
+
+            document.getElementById('aiProcessContent').innerHTML = html;
+        }
+
+        function closeAiProcessModal() {
+            document.getElementById('aiProcessModal').classList.add('hidden');
+            document.getElementById('aiProcessModal').classList.remove('flex');
         }
     </script>
 </body>

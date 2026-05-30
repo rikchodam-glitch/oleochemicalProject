@@ -53,8 +53,37 @@ class AiProviderController extends Controller
             ->take(20)
             ->get();
 
+        // Ambil audit logs untuk setiap alias (proses AI saat mapping)
+        $aliasAuditLogs = \App\Models\AiAliasAuditLog::with(['assetAlias', 'asset', 'employee'])
+            ->latest()
+            ->take(50)
+            ->get()
+            ->keyBy('asset_alias_id');
+
+        // Format audit logs untuk JavaScript
+        $aliasAuditJson = $aliasAuditLogs->values()->map(function($log) {
+            return [
+                'id' => $log->asset_alias_id,
+                'alias' => $log->alias,
+                'asset_code' => $log->asset_code,
+                'asset_description' => $log->asset_description,
+                'original_text' => $log->original_text,
+                'keywords_used' => $log->keywords_used ?: [],
+                'area_detected' => $log->area_detected,
+                'area_asset' => $log->area_asset,
+                'ai_possible_assets' => $log->ai_possible_assets ?: [],
+                'ai_reasoning' => $log->ai_reasoning,
+                'confidence_score' => $log->confidence_score,
+                'area_match' => $log->area_match,
+                'action_taken' => $log->action_taken,
+                'employee_name' => optional($log->employee)->name ?? '-',
+                'telegram_username' => $log->telegram_username,
+                'occurred_at' => $log->occurred_at ? $log->occurred_at->format('d/m/Y H:i:s') : '-',
+            ];
+        });
+
         return view('ai-providers.index', compact(
-            'providers', 'recentLogs', 'stats24h', 'recentAliases'
+            'providers', 'recentLogs', 'stats24h', 'recentAliases', 'aliasAuditLogs', 'aliasAuditJson'
         ));
     }
 
@@ -308,18 +337,38 @@ class AiProviderController extends Controller
 
     /**
      * Reject alias yang dipelajari AI (false positive)
+     * Alasan penolakan dikirim sebagai feedback ke AI untuk pembelajaran.
      */
     public function rejectAlias(Request $request, $id)
     {
         $alias = AssetAlias::findOrFail($id);
+        $reason = $request->reason ?? 'Tidak sesuai menurut admin';
+
         $alias->update([
             'confirmed_by_admin' => false,
             'is_rejected' => true,
             'confirmed_at' => now(),
             'confirmed_by_employee_id' => auth()->id(),
-            'rejection_reason' => $request->reason ?? 'Tidak sesuai menurut admin',
+            'rejection_reason' => $reason,
         ]);
 
-        return redirect()->back()->with('success', "❌ Alias '{$alias->alias}' ditolak. AI tidak akan menggunakannya lagi.");
+        // Kirim feedback ke AI agar belajar dari kesalahan
+        try {
+            $gateway = new AiGatewayService();
+            $gateway->sendFeedback([
+                'type' => 'alias_rejected',
+                'alias' => $alias->alias,
+                'wrong_asset_id' => $alias->asset_id,
+                'wrong_asset_code' => $alias->asset->tech_ident_no ?? '',
+                'wrong_asset_description' => $alias->asset->description ?? '',
+                'reason' => $reason,
+                'rejected_by' => auth()->user()->name ?? 'Admin',
+                'rejected_at' => now()->toIso8601String(),
+            ]);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning("Gagal kirim feedback AI: {$e->getMessage()}");
+        }
+
+        return redirect()->back()->with('success', "❌ Alias '{$alias->alias}' ditolak dengan alasan: \"{$reason}\". AI akan belajar dari alasan ini.");
     }
 }

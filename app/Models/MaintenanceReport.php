@@ -9,9 +9,15 @@ class MaintenanceReport extends Model
     // Mengizinkan pengisian data massal (Mass Assignment)
     protected $guarded = [];
 
+    protected $casts = [
+        'report_date' => 'date',
+        'duration_hours' => 'decimal:1',
+        'needs_admin_review' => 'boolean',
+        'ai_suggested' => 'boolean',
+    ];
+
     /**
      * Relasi ke tabel Assets
-     * Menghubungkan laporan ini dengan alat/equipment terkait
      */
     public function asset()
     {
@@ -20,7 +26,6 @@ class MaintenanceReport extends Model
 
     /**
      * Relasi ke tabel Employees
-     * Menghubungkan laporan ini dengan mekanik/user yang mengerjakan
      */
     public function employee()
     {

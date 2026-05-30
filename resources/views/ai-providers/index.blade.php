@@ -279,6 +279,10 @@
                                         @else
                                             <span class="text-[10px] text-red-600 font-bold">X</span>
                                         @endif
+                                        @php $auditLog = $aliasAuditLogs->get($alias->id); @endphp
+                                        @if($auditLog)
+                                            <button onclick="showAuditModal({{ $alias->id }}, '{{ $alias->alias }}')" class="text-[10px] bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200 font-bold" title="Lihat proses AI">Proses</button>
+                                        @endif
                                     </div>
                                 </td>
                             </tr>
@@ -429,7 +433,23 @@
         </div>
     </div>
 
+    <!-- MODAL AUDIT PROSES AI -->
+    <div id="auditAliasModal" class="modal-overlay" onclick="if(event.target===this) closeModal('auditAliasModal')">
+        <div class="modal-content max-w-3xl">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold text-slate-700">Proses AI: <span id="auditAliasName" class="text-blue-600">-</span></h3>
+                <button onclick="closeModal('auditAliasModal')" class="text-slate-400 hover:text-slate-600 text-xl">&times;</button>
+            </div>
+            <div id="auditContent" class="space-y-4 text-sm">
+                <p class="text-slate-400">Memuat data...</p>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // Data audit logs (dari PHP - sudah di-format di controller)
+        const aliasAuditData = @json($aliasAuditJson);
+
         function openModal(id) { document.getElementById(id).classList.add('open'); }
         function closeModal(id) { document.getElementById(id).classList.remove('open'); }
         function toggleKeyVisibility(inputId, btn) {
@@ -462,6 +482,73 @@
             document.getElementById('rejectAliasName').textContent = aliasText;
             document.getElementById('rejectAliasForm').action = '{{ url("ai-providers") }}/reject-alias/' + aliasId;
             openModal('rejectAliasModal');
+        }
+        function showAuditModal(aliasId, aliasText) {
+            document.getElementById('auditAliasName').textContent = aliasText;
+
+            const audit = aliasAuditData.find(a => a.id == aliasId || a.alias === aliasText);
+
+            if (!audit) {
+                document.getElementById('auditContent').innerHTML = '<p class="text-slate-400">Belum ada data proses untuk alias ini.</p>';
+                openModal('auditAliasModal');
+                return;
+            }
+
+            let html = '';
+
+            html += '<div class="bg-blue-50 border border-blue-200 rounded-lg p-3">';
+            html += '<p class="text-[10px] font-bold uppercase text-blue-600 mb-1">Teks Asli Pengguna</p>';
+            html += '<p class="text-sm font-mono">' + (audit.original_text || '-') + '</p>';
+            html += '</div>';
+
+            html += '<div class="grid grid-cols-2 gap-3">';
+            html += '<div class="bg-slate-50 rounded-lg p-3"><p class="text-[10px] font-bold uppercase text-slate-500">Pilihan Asset</p><p class="text-sm font-bold text-blue-600">' + (audit.asset_code || '-') + '</p><p class="text-xs text-slate-500">' + (audit.asset_description || '') + '</p></div>';
+            html += '<div class="bg-slate-50 rounded-lg p-3"><p class="text-[10px] font-bold uppercase text-slate-500">Confidence</p><p class="text-lg font-black ' + (audit.confidence_score >= 80 ? 'text-green-600' : (audit.confidence_score >= 50 ? 'text-amber-600' : 'text-red-600')) + '">' + audit.confidence_score + '%</p></div>';
+            html += '<div class="bg-slate-50 rounded-lg p-3"><p class="text-[10px] font-bold uppercase text-slate-500">Area Terdeteksi</p><p class="text-sm font-bold">' + (audit.area_detected || 'Tidak ada') + '</p></div>';
+            html += '<div class="bg-slate-50 rounded-lg p-3"><p class="text-[10px] font-bold uppercase text-slate-500">Area Asset Dipilih</p><p class="text-sm font-bold">' + (audit.area_asset || 'Tidak diketahui') + '</p></div>';
+            html += '<div class="bg-slate-50 rounded-lg p-3"><p class="text-[10px] font-bold uppercase text-slate-500">Cocok Area?</p><p class="text-sm font-bold ' + (audit.area_match ? 'text-green-600' : 'text-red-600') + '">' + (audit.area_match ? 'YA' : 'TIDAK') + '</p></div>';
+            html += '<div class="bg-slate-50 rounded-lg p-3"><p class="text-[10px] font-bold uppercase text-slate-500">Oleh</p><p class="text-sm font-bold">' + (audit.telegram_username || audit.employee_name || '-') + '</p><p class="text-xs text-slate-400">' + audit.occurred_at + '</p></div>';
+            html += '</div>';
+
+            if (audit.keywords_used && audit.keywords_used.length > 0) {
+                html += '<div class="bg-amber-50 border border-amber-200 rounded-lg p-3">';
+                html += '<p class="text-[10px] font-bold uppercase text-amber-600 mb-1">Keyword yang Diekstrak</p>';
+                html += '<div class="flex flex-wrap gap-1">';
+                audit.keywords_used.forEach(function(kw) {
+                    html += '<span class="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-mono">' + kw + '</span>';
+                });
+                html += '</div></div>';
+            }
+
+            if (audit.ai_possible_assets && audit.ai_possible_assets.length > 0) {
+                html += '<div class="bg-purple-50 border border-purple-200 rounded-lg p-3">';
+                html += '<p class="text-[10px] font-bold uppercase text-purple-600 mb-1">Opsi yang Dipertimbangkan AI</p>';
+                html += '<div class="space-y-2">';
+                audit.ai_possible_assets.forEach(function(opt, i) {
+                    var letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+                    var letter = letters[i] || '?';
+                    var pct = Math.round((opt.confidence || 0) * 100);
+                    html += '<div class="flex items-center justify-between bg-white rounded p-2 border border-purple-100">';
+                    html += '<div><span class="font-bold text-purple-700 text-xs">' + letter + '.</span> ';
+                    html += '<span class="text-xs font-mono">' + (opt.tech_ident_no || '-') + '</span> - ';
+                    html += '<span class="text-xs">' + (opt.description || '') + '</span>';
+                    if (opt.location) html += ' <span class="text-[10px] text-slate-400">(' + opt.location + ')</span>';
+                    html += '</div>';
+                    html += '<span class="text-xs font-bold ' + (pct >= 80 ? 'text-green-600' : (pct >= 50 ? 'text-amber-600' : 'text-red-600')) + '">' + pct + '%</span>';
+                    html += '</div>';
+                });
+                html += '</div></div>';
+            }
+
+            if (audit.ai_reasoning) {
+                html += '<div class="bg-slate-100 rounded-lg p-3">';
+                html += '<p class="text-[10px] font-bold uppercase text-slate-500 mb-1">Alasan AI / Catatan</p>';
+                html += '<p class="text-sm text-slate-600 italic">"' + audit.ai_reasoning + '"</p>';
+                html += '</div>';
+            }
+
+            document.getElementById('auditContent').innerHTML = html;
+            openModal('auditAliasModal');
         }
         document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open')); });
     </script>

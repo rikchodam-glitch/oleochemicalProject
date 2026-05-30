@@ -31,7 +31,7 @@ class TelegramBotController extends Controller
     }
 
     /**
-     * Webhook endpoint — menerima semua update dari Telegram
+     * Webhook endpoint  menerima semua update dari Telegram
      */
     public function webhook(Request $request)
     {
@@ -40,7 +40,7 @@ class TelegramBotController extends Controller
         $callbackQuery = $update['callback_query'] ?? null;
         $updateId = $update['update_id'] ?? null;
 
-        // 🔥 HANDLE CALLBACK QUERY (tombol inline ditekan)
+        //  HANDLE CALLBACK QUERY (tombol inline ditekan)
         if ($callbackQuery) {
             return $this->handleCallbackQuery($callbackQuery);
         }
@@ -58,7 +58,7 @@ class TelegramBotController extends Controller
             return response()->json(['status' => 'ok']);
         }
 
-        // 🔥 CEK DUPLIKASI VIA UPDATE_ID — paling akurat
+        // CEK DUPLIKASI VIA UPDATE_ID  paling akurat
         if ($updateId) {
             $alreadyProcessed = TelegramBotLog::where('telegram_update_id', $updateId)->exists();
             if ($alreadyProcessed) {
@@ -69,14 +69,14 @@ class TelegramBotController extends Controller
 
         // CEK BLACKLIST
         if (TelegramBlacklist::where('telegram_chat_id', $chatId)->exists()) {
-            $this->telegram->sendMessage($chatId, "⛔ Anda telah diblokir dari bot ini. Hubungi admin untuk informasi lebih lanjut.");
+            $this->telegram->sendMessage($chatId, " Anda telah diblokir dari bot ini. Hubungi admin untuk informasi lebih lanjut.");
             return response()->json(['status' => 'blocked']);
         }
 
         // CEK STATUS BOT
         $botStatus = TelegramSetting::getValue('bot_status', 'active');
         if ($botStatus === 'maintenance') {
-            $this->telegram->sendMessage($chatId, "🔧 Bot sedang dalam perawatan. Silakan coba lagi nanti.");
+            $this->telegram->sendMessage($chatId, " Bot sedang dalam perawatan. Silakan coba lagi nanti.");
             return response()->json(['status' => 'maintenance']);
         }
 
@@ -87,7 +87,7 @@ class TelegramBotController extends Controller
         $incomingMsg = $text ?? '(photo)';
         if (isset($message['photo'])) {
             $fileId = $message['photo'][count($message['photo'])-1]['file_id'] ?? '';
-            $incomingMsg = "📸 [{$fileId}] " . ($text ?? '');
+            $incomingMsg = " [{$fileId}] " . ($text ?? '');
         }
 
         $log = TelegramBotLog::create([
@@ -120,7 +120,7 @@ class TelegramBotController extends Controller
             ]);
 
             $this->telegram->sendMessage($chatId,
-                "❌ Maaf, terjadi kesalahan internal. Silakan coba lagi.\n\n" .
+                " Maaf, terjadi kesalahan internal. Silakan coba lagi.\n\n" .
                 "Kode error: #ERR" . $log->id
             );
 
@@ -134,7 +134,7 @@ class TelegramBotController extends Controller
     }
 
     /**
-     * Handle callback query — user menekan tombol inline keyboard
+     * Handle callback query  user menekan tombol inline keyboard
      */
     protected function handleCallbackQuery(array $callbackQuery): \Illuminate\Http\JsonResponse
     {
@@ -173,17 +173,17 @@ class TelegramBotController extends Controller
 
                 if (!$result['success']) {
                     $this->telegram->editMessageText($chatId, $messageId,
-                        "❌ " . ($result['error'] ?? 'Terjadi kesalahan.')
+                        " " . ($result['error'] ?? 'Terjadi kesalahan.')
                     );
                     return response()->json(['status' => 'error']);
                 }
 
                 $session = $result['session'];
 
-                // ✅ ITEM RESOLVED
+                //  ITEM RESOLVED
                 if ($result['resolved']) {
                     $asset = $result['asset'];
-                    $confirmText = "✅ <b>Item " . ($result['item_index'] + 1) . " dikonfirmasi!</b>\n\n" .
+                    $confirmText = " <b>Item " . ($result['item_index'] + 1) . " dikonfirmasi!</b>\n\n" .
                         "Equipment: <b>{$asset['tech_ident_no']}</b>\n" .
                         "Deskripsi: {$asset['description']}\n";
                     if (!empty($asset['location'])) {
@@ -192,32 +192,33 @@ class TelegramBotController extends Controller
                     $this->telegram->editMessageText($chatId, $messageId, $confirmText);
                 }
 
-                // ⏭️ ITEM SKIPPED
+                // ITEM SKIPPED
                 if (!empty($result['skipped'])) {
                     $this->telegram->editMessageText($chatId, $messageId,
-                        "⏭️ <b>Item " . ($result['item_index'] + 1) . " dilewati.</b>"
+                        " <b>Item " . ($result['item_index'] + 1) . " dilewati.</b>"
                     );
                 }
 
-                // ⚠️ ITEM UNIDENTIFIED
+                // ITEM UNIDENTIFIED
                 if (!empty($result['unidentified'])) {
                     $this->telegram->editMessageText($chatId, $messageId,
-                        "⚠️ <b>Item " . ($result['item_index'] + 1) . " tidak teridentifikasi.</b>\n" .
+                        "<b>Item " . ($result['item_index'] + 1) . " tidak teridentifikasi.</b>\n" .
                         "Setelah " . $result['attempts'] . " kali percobaan."
                     );
                 }
 
-                // ✅ SEMUA SELESAI
+                // SEMUA SELESAI
                 if ($result['completed']) {
                     $summary = \App\Services\AI\ClarificationSessionManager::getSummary($session);
-                    $summaryMsg = \App\Services\AI\ClarificationSessionManager::buildSummaryMessage($summary, $employee);
+                    $savedReports = \App\Services\AI\ClarificationSessionManager::saveAllReports($session);
+                    $summaryMsg = \App\Services\AI\ClarificationSessionManager::buildSummaryMessage($summary, $employee, $savedReports);
 
-                    $savedIds = \App\Services\AI\ClarificationSessionManager::saveAllReports($session);
-                    if (!empty($savedIds)) {
+                    if (!empty($savedReports)) {
+                        $firstReport = $savedReports[0];
                         TelegramBotLog::where('telegram_chat_id', $chatId)
                             ->latest()
                             ->first()
-                            ?->update(['maintenance_report_id' => $savedIds[0]]);
+                            ?->update(['maintenance_report_id' => $firstReport['id']]);
                     }
 
                     $this->telegram->sendMessage($chatId, $summaryMsg);
@@ -225,7 +226,7 @@ class TelegramBotController extends Controller
                     return response()->json(['status' => 'completed']);
                 }
 
-                // ➡️ LANJUT KE ITEM BERIKUTNYA
+                // LANJUT KE ITEM BERIKUTNYA
                 $nextIdx = $result['next_item_index'];
                 $remaining = $result['remaining_items'];
                 $total = $result['total_items'];
@@ -233,7 +234,7 @@ class TelegramBotController extends Controller
                 $nextItem = \App\Services\AI\ClarificationSessionManager::getCurrentItem($session);
                 $nextMsg = \App\Services\AI\ClarificationSessionManager::buildClarificationMessage($session, $nextItem);
 
-                $nextMsg = "➡️ <b>Lanjut Item " . ($nextIdx + 1) . " dari {$total}</b>\n\n" . $nextMsg;
+                $nextMsg = "<b>Lanjut Item " . ($nextIdx + 1) . " dari {$total}</b>\n\n" . $nextMsg;
 
                 if (!empty($nextItem['possible_assets'])) {
                     $buttons = \App\Services\AI\ClarificationSessionManager::buildClarificationKeyboard($session, $nextItem);
@@ -254,7 +255,7 @@ class TelegramBotController extends Controller
 
                 if (!$result['success']) {
                     $this->telegram->editMessageText($chatId, $messageId,
-                        "❌ " . ($result['error'] ?? 'Terjadi kesalahan.')
+                        " " . ($result['error'] ?? 'Terjadi kesalahan.')
                     );
                     return response()->json(['status' => 'error']);
                 }
@@ -262,19 +263,20 @@ class TelegramBotController extends Controller
                 $session = $result['session'];
 
                 $this->telegram->editMessageText($chatId, $messageId,
-                    "⏭️ <b>Item " . ($result['item_index'] + 1) . " dilewati.</b>"
+                    " <b>Item " . ($result['item_index'] + 1) . " dilewati.</b>"
                 );
 
                 if ($result['completed']) {
                     $summary = \App\Services\AI\ClarificationSessionManager::getSummary($session);
-                    $summaryMsg = \App\Services\AI\ClarificationSessionManager::buildSummaryMessage($summary, $employee);
+                    $savedReports = \App\Services\AI\ClarificationSessionManager::saveAllReports($session);
+                    $summaryMsg = \App\Services\AI\ClarificationSessionManager::buildSummaryMessage($summary, $employee, $savedReports);
 
-                    $savedIds = \App\Services\AI\ClarificationSessionManager::saveAllReports($session);
-                    if (!empty($savedIds)) {
+                    if (!empty($savedReports)) {
+                        $firstReport = $savedReports[0];
                         TelegramBotLog::where('telegram_chat_id', $chatId)
                             ->latest()
                             ->first()
-                            ?->update(['maintenance_report_id' => $savedIds[0]]);
+                            ?->update(['maintenance_report_id' => $firstReport['id']]);
                     }
 
                     $this->telegram->sendMessage($chatId, $summaryMsg);
@@ -287,7 +289,7 @@ class TelegramBotController extends Controller
                 $nextIdx = $result['next_item_index'];
 
                 $nextMsg = \App\Services\AI\ClarificationSessionManager::buildClarificationMessage($session, $nextItem);
-                $nextMsg = "➡️ <b>Lanjut Item " . ($nextIdx + 1) . " dari {$total}</b>\n\n" . $nextMsg;
+                $nextMsg = "<b>Lanjut Item " . ($nextIdx + 1) . " dari {$total}</b>\n\n" . $nextMsg;
 
                 if (!empty($nextItem['possible_assets'])) {
                     $buttons = \App\Services\AI\ClarificationSessionManager::buildClarificationKeyboard($session, $nextItem);
@@ -339,16 +341,16 @@ class TelegramBotController extends Controller
                         "NIK: {$employee->nik}\n" .
                         "Departemen: {$employee->department}\n" .
                         "Shift: {$employee->shift}\n" .
-                        "Status: ✅ Terdaftar"
+                        "Status:   Terdaftar"
                     );
                 } else {
-                    $this->telegram->sendMessage($chatId, "❌ Anda belum terdaftar. Ketik /register untuk mendaftar.");
+                    $this->telegram->sendMessage($chatId, "  Anda belum terdaftar. Ketik /register untuk mendaftar.");
                 }
                 break;
 
             default:
                 $this->telegram->sendMessage($chatId,
-                    "❌ Perintah tidak dikenal. Ketik /help untuk bantuan."
+                    "  Perintah tidak dikenal. Ketik /help untuk bantuan."
                 );
                 break;
         }
@@ -360,7 +362,7 @@ class TelegramBotController extends Controller
     protected function handleUnregisteredUser(string $text, string $chatId, ?string $username, TelegramBotLog $log): void
     {
         $this->telegram->sendMessage($chatId,
-            "⚠️ <b>Anda belum terdaftar!</b>\n\n" .
+            "  <b>Anda belum terdaftar!</b>\n\n" .
             "Untuk menggunakan bot ini, silakan daftar terlebih dahulu:\n" .
             "Ketik /register untuk memulai pendaftaran.\n\n" .
             "Atau hubungi admin untuk mendaftarkan nomor HP Anda."
@@ -373,7 +375,7 @@ class TelegramBotController extends Controller
     protected function handleRegister(string $chatId, ?string $username, TelegramBotLog $log): void
     {
         $this->telegram->sendMessage($chatId,
-            "📝 <b>Pendaftaran Teknisi</b>\n\n" .
+            "  <b>Pendaftaran Teknisi</b>\n\n" .
             "Silakan kirim <b>nomor HP</b> Anda yang terdaftar di sistem.\n\n" .
             "Contoh: <code>08123456789</code> atau <code>628123456789</code>\n\n" .
             "Nomor ini harus sama dengan yang didaftarkan oleh admin."
@@ -411,7 +413,7 @@ class TelegramBotController extends Controller
         }
 
         // DETEKSI JENIS: Report Rangkuman atau tolak?
-        $isRangkuman = preg_match('/^Report\s+shift\s+\d+/i', trim($text));
+        $isRangkuman = preg_match('/^Report\s*shift\s*\d+/i', trim($text));
 
         if ($isRangkuman) {
             $this->handleReportRangkuman($text, $chatId, $employee, $log);
@@ -481,20 +483,20 @@ class TelegramBotController extends Controller
 
         $log->update(['maintenance_report_id' => $report->id]);
 
-        $assetName = $asset ? $asset->tech_ident_no : '⚠️ (tidak dikenal)';
+        $assetName = $asset ? $asset->tech_ident_no : '  (tidak dikenal)';
         $confText = $aiResult && isset($aiResult['items'][0]['confidence'])
-            ? ' 🤖' . round($aiResult['items'][0]['confidence'] * 100) . '%'
+            ? '  ' . round($aiResult['items'][0]['confidence'] * 100) . '%'
             : '';
 
         // Kirim konfirmasi + ID
-        $response = "✅ <b>Laporan direkam!</b>\n\n";
+        $response = "  <b>Laporan direkam!</b>\n\n";
         $response .= "Shift: {$parsed['shift']} | {$parsed['date']->format('d/m/Y')}\n";
         $response .= "Alat: {$assetName}{$confText}\n";
         $response .= "Aksi: {$parsed['items'][0]['action']}\n\n";
-        $response .= "📸 <b>Kirim foto — salin ID di bawah:</b>\n\n";
+        $response .= "  <b>Kirim foto  salin ID di bawah:</b>\n\n";
         $response .= "<code>{$telegramReportId}</code>\n\n";
-        $response .= "📌 <b>Cara:</b> Reply pesan ini + attach foto.\n";
-        $response .= "Atau kirim foto dengan caption ID di atas ⬆️";
+        $response .= " <b>Cara:</b> Reply pesan ini + attach foto.\n";
+        $response .= "Atau kirim foto dengan caption ID di atas sebagai caption.";
 
         $this->telegram->sendMessage($chatId, $response);
     }
@@ -587,13 +589,152 @@ class TelegramBotController extends Controller
         "Foto otomatis ter-attach."
     );
 }
-    /**
-     * Report Rangkuman — format "Report shift X\nDD/MM/YYYY\n1. Aksi - done"
-     * Multiple items, AI analisa batch
+    protected function saveResolvedItemsAndGetSummary(array $sessionItems, string $chatId, Employee $employee,
+TelegramBotLog $log, array $parsed, string $rawText): string
+    {
+        $dateStr = $parsed['date']->format('Ymd');
+        $reportIds = [];
+
+        DB::beginTransaction();
+        try {
+            foreach ($sessionItems as $item) {
+                $lastSeq = MaintenanceReport::where('telegram_report_id', 'LIKE', "LMS-{$dateStr}-%")
+                    ->orderBy('telegram_report_id', 'desc')
+                    ->value('telegram_report_id');
+                $nextSeq = 1;
+                if ($lastSeq && preg_match('/-(\d{3})$/', $lastSeq, $m)) {
+                    $nextSeq = (int)$m[1] + 1;
+                }
+                $telegramReportId = 'LMS-' . $dateStr . '-' . str_pad($nextSeq, 3, '0', STR_PAD_LEFT);
+
+                $report = MaintenanceReport::create([
+                    'asset_id' => $item['resolved_asset_id'],
+                    'employee_id' => $employee->id,
+                    'raw_text' => $rawText,
+                    'action_taken' => $item['original_action'] ?? $item['raw_text'],
+                    'status' => $item['original_status'] ?? 'done',
+                    'report_date' => $parsed['date'],
+                    'shift' => $parsed['shift'],
+                    'source' => 'telegram',
+                    'telegram_report_id' => $telegramReportId,
+                    'ai_confidence' => $item['confidence'] ?? null,
+                    'ai_suggested' => true,
+                ]);
+                $reportIds[] = $report;
+            }
+            DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        $log->update(['maintenance_report_id' => $reportIds[0]->id ?? null]);
+
+        $response = "  <b>Rangkuman tersimpan!</b>\n\n";
+        $response .= "Shift: {$parsed['shift']} | {$parsed['date']->format('d/m/Y')}\n";
+        $response .= "Teknisi: {$employee->name}\n\n";
+
+        foreach ($reportIds as $report) {
+            $assetName = $report->asset ? $report->asset->tech_ident_no : '(tidak dikenal)';
+            $response .= "  <b>{$report->telegram_report_id}</b>\n";
+            $response .= "   " . $report->action_taken . " -> " . $assetName . "\n\n";
+        }
+
+        // Daftar ID untuk copy-paste
+        $response .= "  <b>Kirim foto  salin ID di bawah:</b>\n\n";
+        foreach ($reportIds as $report) {
+            $response .= "<code>{$report->telegram_report_id}</code>\n";
+        }
+        $response .= "\n <b>Cara:</b> Reply pesan ini + attach foto.\n";
+        $response .= "Atau kirim foto dengan caption ID di atas.";
+
+        return $response;
+    }
+    protected function sendNextClarificationItem(array $session, string $chatId): void
+    {
+        $totalItems = $session['total_items'] ?? 0;
+        $items = $session['items'] ?? [];
+
+        // Cari item pending pertama
+        $targetIdx = null;
+        foreach ($items as $i => $it) {
+            if (($it['status'] ?? '') === 'pending') {
+                $targetIdx = $i;
+                break;
+            }
+        }
+
+        if ($targetIdx === null) {
+            // Semua selesai  set completed dan kirim summary dengan ID reports
+            $session['status'] = 'completed';
+            \Illuminate\Support\Facades\Cache::put(
+                \App\Services\AI\ClarificationSessionManager::CACHE_PREFIX . $session['session_id'],
+                $session,
+                \App\Services\AI\ClarificationSessionManager::CACHE_TTL
+            );
+            $savedReports = \App\Services\AI\ClarificationSessionManager::saveAllReports($session);
+            $summary = \App\Services\AI\ClarificationSessionManager::getSummary($session);
+
+            // Cari employee untuk ditampilkan di summary
+            $employeeSummary = null;
+            if (!empty($session['employee_id'])) {
+                $employeeSummary = \App\Models\Employee::find($session['employee_id']);
+            }
+
+            $summaryMsg = \App\Services\AI\ClarificationSessionManager::buildSummaryMessage($summary, $employeeSummary, $savedReports);
+            $this->telegram->sendMessage($chatId, $summaryMsg);
+            \App\Services\AI\ClarificationSessionManager::destroySession($session['session_id']);
+            return;
+        }
+
+        $currentItem = $items[$targetIdx];
+
+        $session['current_item_index'] = $targetIdx;
+        \Illuminate\Support\Facades\Cache::put(
+            \App\Services\AI\ClarificationSessionManager::CACHE_PREFIX . $session['session_id'],
+            $session,
+            \App\Services\AI\ClarificationSessionManager::CACHE_TTL
+        );
+
+        // === CEK: Sedang menunggu durasi ===
+        if ($currentItem['awaiting_duration'] ?? false) {
+            $this->telegram->sendMessage($chatId,
+                "Item " . ($targetIdx + 1) . "/" . $totalItems . " sudah dikonfirmasi.\n" .
+                "Berapa durasi pengerjaan? (contoh: 2, 1.5, 30 menit, atau 0 untuk lewati)"
+            );
+            return;
+        }
+        // === Jika ini item pertama dan sudah resolved (auto-resolve/area), konfirmasi dulu ===
+        // Cek apakah ada item resolved sebelum item pending pertama
+        $resolvedBefore = $targetIdx;
+        if ($resolvedBefore > 0) {
+            // Ada item yang sudah resolved otomatis  informasikan user
+            $resolvedItems = [];
+            for ($i = 0; $i < $targetIdx; $i++) {
+                if ($items[$i]['status'] === 'resolved' && $items[$i]['work_type'] === 'area') {
+                    $resolvedItems[] = ($i + 1) . ". " . e($items[$i]['raw_text']) . " -> PEKERJAAN AREA";
+                } elseif ($items[$i]['status'] === 'resolved' && $items[$i]['work_type'] === 'equipment') {
+                    $resolvedItems[] = ($i + 1) . ". " . e($items[$i]['raw_text']) . " -> " . $items[$i]['resolved_asset_code'];
+                }
+            }
+            if (!empty($resolvedItems)) {
+                $this->telegram->sendMessage($chatId,
+                    "Item sebelumnya otomatis dikenali:\n" . implode("\n", $resolvedItems)
+                );
+            }
+        }
+        // === KIRIM PESAN PILIH EQUIPMENT ===
+        // Gunakan buildClarificationMessage dari SessionManager yang sudah include opsi manual (#)
+        $msg = \App\Services\AI\ClarificationSessionManager::buildClarificationMessage($session, $currentItem);
+        $this->telegram->sendMessage($chatId, $msg);
+    }
+        /**
+     * Report Rangkuman - format "Report shift X\nDD/MM/YYYY\n1. Aksi - done"
+     * Multiple items, AI analisa BATCH lalu klarifikasi SEQUENTIAL per item
+     * Auto-resolve jika confidence >= 95%, tanpa perlu klarifikasi user
      */
     protected function handleReportRangkuman(string $text, string $chatId, Employee $employee, TelegramBotLog $log): void
     {
-        // Parse teks laporan
         $parsed = $this->parser->parse($text);
 
         if (empty($parsed['items'])) {
@@ -609,11 +750,10 @@ class TelegramBotController extends Controller
         }
 
         $this->telegram->sendMessage($chatId,
-            "📋 <b>Rangkuman</b> — " . count($parsed['items']) . " item ditemukan.\n" .
-            "🧠 AI sedang menganalisa..."
+            "Rangkuman - " . count($parsed['items']) . " item ditemukan.\n" .
+            "AI sedang menganalisa..."
         );
 
-        // PANGGIL AI 1x dengan full teks
         $gateway = new AiGatewayService();
         $gateway->withContext($employee);
 
@@ -629,120 +769,184 @@ class TelegramBotController extends Controller
             $aiResult = null;
         }
 
-        $itemsOpsi = [];
+        // ===== BUILD SESSION ITEMS =====
+        $sessionItems = [];
 
         if ($aiResult && isset($aiResult['items']) && !empty($aiResult['items'])) {
-            foreach ($aiResult['items'] as $index => $aiItem) {
-                $origItem = $parsed['items'][$index] ?? null;
-                $conf = $aiItem['confidence'] ?? 0;
-                $possibleAssets = $aiItem['possible_assets'] ?? [];
+            $aiItems = $aiResult['items'];
 
-                if ($conf >= 0.8 && !empty($aiItem['suggested_asset_id'])) {
-                    $assetModel = \App\Models\Asset::find($aiItem['suggested_asset_id']);
-                    $itemsOpsi[] = [
-                        'index' => $index,
-                        'action' => $origItem['action'] ?? '',
-                        'status' => $origItem['status'] ?? 'done',
-                        'resolved' => true,
-                        'asset_id' => $aiItem['suggested_asset_id'],
-                        'tech_ident_no' => $assetModel->tech_ident_no ?? $aiItem['suggested_tech_ident_no'] ?? '',
-                        'description' => $assetModel->description ?? '',
+            foreach ($parsed['items'] as $index => $origItem) {
+                // Ambil item dari AI jika ada, jika tidak gunakan data dari parser
+                $aiItem = $aiItems[$index] ?? null;
+                if ($aiItem === null) {
+                    // AI tidak memberikan data untuk item ini  fallback
+                    $sessionItems[] = [
+                        'raw_text' => $origItem['action'],
+                        'possible_assets' => [],
+                        'confidence' => 0,
+                        'status' => 'pending',
+                        'work_type' => null,
+                        'attempts' => 0,
+                        'max_attempts' => \App\Services\AI\ClarificationSessionManager::MAX_CLARIFICATION_ATTEMPTS,
+                        'resolved_asset_id' => null,
+                        'resolved_asset_code' => null,
+                        'resolved_asset_description' => null,
+                        'resolved_location' => null,
+                        'original_action' => $origItem['action'],
+                        'original_status' => $origItem['status'] ?? 'done',
+                        'duration_hours' => $origItem['duration_hours'] ?? null,
+                        'notes' => 'AI tidak memberikan analisa untuk item ini',
+                        'parsed_date' => $parsed['date']->format('Y-m-d'),
+                        'parsed_shift' => $parsed['shift'],
+                    ];
+                    continue;
+                }
+
+                $conf = $aiItem['confidence'] ?? 0;
+                $suggestedAssetId = $aiItem['suggested_asset_id'] ?? null;
+
+                // Ambil durasi dari parser (jika ada)
+                $durationHours = $origItem['duration_hours'] ?? null;
+
+                // AUTO-RESOLVE jika confidence >= 95%
+                if ($conf >= 0.95 && !empty($suggestedAssetId)) {
+                    $assetModel = \App\Models\Asset::find($suggestedAssetId);
+                    if ($assetModel) {
+                        $sessionItems[] = [
+                            'raw_text' => $origItem['action'] ?? $aiItem['original_text'] ?? '',
+                            'possible_assets' => [],
+                            'confidence' => $conf,
+                            'status' => 'resolved',
+                            'work_type' => 'equipment',
+                            'attempts' => 0,
+                            'max_attempts' => 0,
+                            'resolved_asset_id' => $assetModel->id,
+                            'resolved_asset_code' => $assetModel->tech_ident_no ?? '',
+                            'resolved_asset_description' => $assetModel->description ?? '',
+                            'resolved_location' => ($assetModel->area->name ?? '') . ($assetModel->subArea->name ? ' - ' . $assetModel->subArea->name : ''),
+                            'original_action' => $origItem['action'] ?? null,
+                            'original_status' => $origItem['status'] ?? 'done',
+                            'duration_hours' => $durationHours,
+                            'notes' => 'Auto-resolved (confidence ' . round($conf * 100) . '%)',
+                            'parsed_date' => $parsed['date']->format('Y-m-d'),
+                            'parsed_shift' => $parsed['shift'],
+                        ];
+                        continue;
+                    }
+                }
+
+                // Item ambigu (< 95%)
+                $possibleAssets = $aiItem['possible_assets'] ?? [];
+                $isAreaWork = $aiItem['is_area_work'] ?? false;
+
+                if ($isAreaWork) {
+                    // AI mengidentifikasi ini sebagai pekerjaan area  langsung resolved
+                    $sessionItems[] = [
+                        'raw_text' => $origItem['action'] ?? $aiItem['original_text'] ?? '',
+                        'possible_assets' => [],
+                        'confidence' => $conf,
+                        'status' => 'resolved',
+                        'work_type' => 'area',
+                        'attempts' => 0,
+                        'max_attempts' => 0,
+                        'resolved_asset_id' => null,
+                        'resolved_asset_code' => 'AREA',
+                        'resolved_asset_description' => 'Pekerjaan Area',
+                        'resolved_location' => '',
+                        'original_action' => $origItem['action'] ?? null,
+                        'original_status' => $origItem['status'] ?? 'done',
+                        'duration_hours' => $durationHours,
+                        'notes' => 'AI mengidentifikasi sebagai pekerjaan area',
+                        'parsed_date' => $parsed['date']->format('Y-m-d'),
+                        'parsed_shift' => $parsed['shift'],
                     ];
                 } else {
-                    $opsi = [];
-                    $letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
-                    foreach ($possibleAssets as $paIdx => $pa) {
-                        $opsi[] = [
-                            'letter' => $letters[$paIdx] ?? '?',
-                            'id' => $pa['id'],
-                            'tech_ident_no' => $pa['tech_ident_no'] ?? '',
-                            'description' => $pa['description'] ?? '',
-                            'location' => $pa['location'] ?? '',
-                        ];
-                    }
-                    $itemsOpsi[] = [
-                        'index' => $index,
-                        'action' => $origItem['action'] ?? $aiItem['original_text'] ?? '',
-                        'status' => $origItem['status'] ?? 'done',
-                        'resolved' => false,
-                        'opsi' => $opsi,
+                    $sessionItems[] = [
+                        'raw_text' => $origItem['action'] ?? $aiItem['original_text'] ?? '',
+                        'possible_assets' => $possibleAssets,
+                        'confidence' => $conf,
+                        'status' => 'pending',
+                        'work_type' => null,
+                        'attempts' => 0,
+                        'max_attempts' => \App\Services\AI\ClarificationSessionManager::MAX_CLARIFICATION_ATTEMPTS,
+                        'resolved_asset_id' => null,
+                        'resolved_asset_code' => null,
+                        'resolved_asset_description' => null,
+                        'resolved_location' => null,
+                        'original_action' => $origItem['action'] ?? null,
+                        'original_status' => $origItem['status'] ?? 'done',
+                        'duration_hours' => $durationHours,
+                        'notes' => null,
+                        'parsed_date' => $parsed['date']->format('Y-m-d'),
+                        'parsed_shift' => $parsed['shift'],
                     ];
                 }
             }
         } else {
-            // AI gagal
+            // AI GAGAL
             foreach ($parsed['items'] as $index => $item) {
-                $itemsOpsi[] = [
-                    'index' => $index,
-                    'action' => $item['action'],
-                    'status' => $item['status'] ?? 'done',
-                    'resolved' => false,
-                    'opsi' => [],
+                $sessionItems[] = [
+                    'raw_text' => $item['action'],
+                    'possible_assets' => [],
+                    'confidence' => 0,
+                    'status' => 'pending',
+                    'work_type' => null,
+                    'attempts' => 0,
+                    'max_attempts' => \App\Services\AI\ClarificationSessionManager::MAX_CLARIFICATION_ATTEMPTS,
+                    'resolved_asset_id' => null,
+                    'resolved_asset_code' => null,
+                    'resolved_asset_description' => null,
+                    'resolved_location' => null,
+                    'original_action' => $item['action'],
+                    'original_status' => $item['status'] ?? 'done',
+                    'duration_hours' => $item['duration_hours'] ?? null,
+                    'notes' => 'AI gagal menganalisa',
+                    'parsed_date' => $parsed['date']->format('Y-m-d'),
+                    'parsed_shift' => $parsed['shift'],
                 ];
             }
         }
 
-        // Build pesan
-        $msg = "🤖 <b>Analisa Rangkuman</b>\n\n";
-        $msg .= count($itemsOpsi) . " item:\n\n";
-
-        foreach ($itemsOpsi as $io) {
-            $num = $io['index'] + 1;
-            $msg .= "<b>{$num}. {$io['action']}</b> [{$io['status']}]\n";
-            if ($io['resolved']) {
-                $msg .= "   ✅ {$io['tech_ident_no']} — {$io['description']}\n";
-            } elseif (!empty($io['opsi'])) {
-                $msg .= "   Pilih:\n";
-                foreach ($io['opsi'] as $o) {
-                    $msg .= "   {$o['letter']}. {$o['tech_ident_no']} — {$o['description']}";
-                    if ($o['location']) $msg .= " ({$o['location']})";
-                    $msg .= "\n";
-                }
-            } else {
-                $msg .= "   ❓ Tidak ada opsi\n";
+        // Cek apakah semua auto-resolved
+        $allResolved = true;
+        $firstPendingIndex = null;
+        foreach ($sessionItems as $siIdx => $si) {
+            if ($si['status'] !== 'resolved') {
+                $allResolved = false;
+                if ($firstPendingIndex === null) $firstPendingIndex = $siIdx;
             }
-            $msg .= "\n";
         }
 
-        $ambiguousCount = count(array_filter($itemsOpsi, fn($io) => !$io['resolved']));
-        if ($ambiguousCount > 0) {
-            $msg .= "📝 <b>Cara menjawab:</b>\n";
-            $msg .= "Balas dengan format nomor.huruf\n";
-            $msg .= "Contoh: <code>1.A 2.C 3.B 4.A</code>\n";
-            $msg .= "Atau: <code>1.A</code> jika hanya item 1 saja\n";
-            $msg .= "Ketik <code>lewati</code> untuk skip semua\n\n";
-            $msg .= "⏳ Sisa waktu: 5 menit";
-        } else {
-            $msg .= "\n✅ Semua item berhasil dikenali! Menyimpan laporan...";
-            // Simpan langsung
-            $this->processNormalReportForRangkuman($parsed, $text, $chatId, $employee, $log, $aiResult, $itemsOpsi);
+        if ($allResolved) {
+            $summary = $this->saveResolvedItemsAndGetSummary($sessionItems, $chatId, $employee, $log, $parsed, $text);
+            $this->telegram->sendMessage($chatId, $summary);
             return;
         }
 
-        // Simpan session
-        $session = \App\Services\AI\ClarificationSessionManager::createSession(
-            (int)$chatId, $chatId, $aiResult ?? [], $employee,
-            $parsed['raw_text'], $parsed['items'] ?? null,
-            array_map(function($io) {
-                return [
-                    'action' => $io['action'],
-                    'status' => $io['status'] ?? 'done',
-                    'possible_assets' => array_map(function($o) {
-                        return [
-                            'id' => $o['id'],
-                            'tech_ident_no' => $o['tech_ident_no'],
-                            'description' => $o['description'],
-                            'location' => $o['location'] ?? '',
-                        ];
-                    }, $io['opsi'] ?? []),
-                    'clarification_question' => 'Pilih equipment:',
-                    'parsed_date' => null, // akan diisi dari session
-                    'parsed_shift' => null,
-                ];
-            }, array_filter($itemsOpsi, fn($io) => !$io['resolved']))
+        // Buat session
+        $sessionId = 'user_' . $chatId;
+        $session = [
+            'session_id' => $sessionId,
+            'telegram_user_id' => (int)$chatId,
+            'chat_id' => $chatId,
+            'employee_id' => $employee->id,
+            'raw_text' => $parsed['raw_text'],
+            'items' => $sessionItems,
+            'total_items' => count($sessionItems),
+            'current_item_index' => $firstPendingIndex ?? 0,
+            'started_at' => now()->toIso8601String(),
+            'updated_at' => now()->toIso8601String(),
+            'status' => 'waiting_user',
+            'completed_items' => count(array_filter($sessionItems, fn($si) => $si['status'] === 'resolved')),
+        ];
+
+        \Illuminate\Support\Facades\Cache::put(
+            \App\Services\AI\ClarificationSessionManager::CACHE_PREFIX . $sessionId,
+            $session,
+            \App\Services\AI\ClarificationSessionManager::CACHE_TTL
         );
 
-        $this->telegram->sendMessage($chatId, $msg);
+        $this->sendNextClarificationItem($session, $chatId);
     }
 
     /**
@@ -791,147 +995,295 @@ class TelegramBotController extends Controller
 
         $log->update(['maintenance_report_id' => $reportIds[0]->id ?? null]);
 
-        $response = "✅ <b>Rangkuman tersimpan!</b>\n\n";
+        $response = "  <b>Rangkuman tersimpan!</b>\n\n";
         $response .= "Shift: {$parsed['shift']} | {$parsed['date']->format('d/m/Y')}\n";
         $response .= "Teknisi: {$employee->name}\n\n";
 
         foreach ($reportIds as $report) {
-            $assetName = $report->asset ? $report->asset->tech_ident_no : '⚠️ (tidak dikenal)';
-            $response .= "✅ <b>{$report->telegram_report_id}</b>\n";
+            $assetName = $report->asset ? $report->asset->tech_ident_no : '  (tidak dikenal)';
+            $response .= "  <b>{$report->telegram_report_id}</b>\n";
             $response .= "   └ {$report->action_taken} → {$assetName}\n\n";
         }
 
         $this->telegram->sendMessage($chatId, $response);
 
         // Kirim daftar ID untuk foto
-        $copyText = "📸 <b>Kirim foto — salin ID di bawah:</b>\n\n";
+        $copyText = "  <b>Kirim foto  salin ID di bawah:</b>\n\n";
         foreach ($reportIds as $report) {
             $copyText .= "<code>{$report->telegram_report_id}</code>\n";
         }
-        $copyText .= "\n📌 <b>Cara:</b> Reply pesan ini + attach foto.\n";
-        $copyText .= "Atau kirim foto dengan caption ID di atas ⬆️";
+        $copyText .= "\n <b>Cara:</b> Reply pesan ini + attach foto.\n";
+        $copyText .= "Atau kirim foto dengan caption ID di atas  ";
         $this->telegram->sendMessage($chatId, $copyText);
     }
-    protected function processClarificationReply(string $text, string $chatId, Employee $employee, TelegramBotLog $log, array $activeSession): void
-    {        $sessionId = $activeSession['session_id'];
+        protected function processClarificationReply(string $text, string $chatId, Employee $employee, TelegramBotLog $log, array $activeSession): void
+    {
+        $sessionId = $activeSession['session_id'];
         $text = trim($text);
+        $textLower = strtolower($text);
 
-        // Cek apakah user mau skip semua
-        if (in_array(strtolower($text), ['lewati', 'skip', 'tidak ada', '0'])) {
-            // Skip semua item ambigu
-            $result = \App\Services\AI\ClarificationSessionManager::skipAllItems($sessionId);
-            if (!$result['success']) {
-                $this->telegram->sendMessage($chatId, "❌ " . ($result['error'] ?? 'Terjadi kesalahan.'));
-                return;
-            }
-            $session = $result['session'];
-            // Selesai, simpan
-            $this->finalizeSession($sessionId, $session, $chatId, $employee, $log);
-            return;
-        }
-
-        // Parse format: "1.A 2.C 3.B 4.A" atau "1.A 2.C" atau "1.A"
-        $pattern = '/(\d+)\s*[\.\:\-]?\s*([A-Ha-h])/';
-        preg_match_all($pattern, $text, $matches, PREG_SET_ORDER);
-
-        if (empty($matches)) {
-            // Coba format alternatif: "A1" atau "1A"
-            $pattern2 = '/(\d+)\s*([A-Ha-h])/';
-            preg_match_all($pattern2, $text, $matches2, PREG_SET_ORDER);
-            if (!empty($matches2)) {
-                $matches = $matches2;
-            } else {
-                $this->telegram->sendMessage($chatId,
-                    "⚠️ Format tidak dikenali.\n\n" .
-                    "Gunakan format: <code>1.A 2.C 3.B 4.A</code>\n" .
-                    "Atau: <code>1.A</code> untuk satu item\n" .
-                    "Atau ketik <b>lewati</b> untuk skip semua."
-                );
-                return;
-            }
-        }
-
-        // Proses setiap pilihan user
-        $results = [];
-        foreach ($matches as $m) {
-            $itemNum = (int)$m[1];
-            $letter = strtoupper($m[2]);
-            $results[] = \App\Services\AI\ClarificationSessionManager::processItemByLetter(
-                $sessionId, $itemNum - 1, $letter // itemNum 1-based -> 0-based index
-            );
-        }
-
-        // Cek hasil
-        $successCount = 0;
-        $errorCount = 0;
-        $errors = [];
-        foreach ($results as $r) {
-            if ($r['success']) {
-                $successCount++;
-            } else {
-                $errorCount++;
-                $errors[] = $r['error'] ?? 'Error';
-            }
-        }
-
-        if ($errorCount > 0) {
-            $this->telegram->sendMessage($chatId,
-                "⚠️ {$successCount} sukses, {$errorCount} gagal:\n" .
-                implode("\n", array_slice($errors, 0, 3))
-            );
-        }
-
-        // Cek apakah semua item sudah terisi
         $session = \App\Services\AI\ClarificationSessionManager::getSession($sessionId);
         if (!$session) {
-            $this->telegram->sendMessage($chatId, "❌ Sesi telah kadaluarsa.");
+            $this->telegram->sendMessage($chatId, "Sesi telah kadaluarsa. Silakan kirim laporan ulang.");
             return;
         }
 
-        // Cek apakah semua item sudah resolved
-        $allResolved = true;
-        foreach ($session['items'] as $item) {
-            if (empty($item['resolved_asset_id'])) {
-                $allResolved = false;
+        $items = &$session['items'];
+        $totalItems = $session['total_items'] ?? 0;
+
+        // Cari item pending yang sedang aktif
+        $targetIdx = null;
+        for ($i = $session['current_item_index'] ?? 0; $i < $totalItems; $i++) {
+            if (($items[$i]['status'] ?? '') === 'pending') {
+                $targetIdx = $i;
                 break;
             }
         }
 
-        if ($allResolved) {
-            // Semua selesai
+        if ($targetIdx === null) {
+            // Semua item selesai  panggil finalize yang akan kirim summary dengan ID reports
             $this->finalizeSession($sessionId, $session, $chatId, $employee, $log);
-        } else {
-            // Masih ada yang belum
-            $remainingItems = [];
-            foreach ($session['items'] as $idx => $item) {
-                if (empty($item['resolved_asset_id'])) {
-                    $remainingItems[] = ($idx + 1) . ". " . ($item['raw_text'] ?? 'Item ' . ($idx+1));
-                }
-            }
-            $this->telegram->sendMessage($chatId,
-                "✅ {$successCount} item dikonfirmasi!\n\n" .
-                "Masih ada " . count($remainingItems) . " item:\n" .
-                implode("\n", $remainingItems) . "\n\n" .
-                "Balas dengan format: <code>1.A 2.C 3.B</code>"
-            );
+            return;
         }
-    }
 
+        $currentItem = &$items[$targetIdx];
+        $possibleAssets = $currentItem['possible_assets'] ?? [];
+        $letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+
+        // ===== CEK: JAWABAN DURASI =====
+        if ($currentItem['awaiting_duration'] ?? false) {
+            $parsedDuration = \App\Services\AI\ClarificationSessionManager::parseDurationInput($textLower);
+            if ($parsedDuration !== null) {
+                $currentItem['duration_hours'] = $parsedDuration;
+                $currentItem['awaiting_duration'] = false;
+                $currentItem['notes'] = ($currentItem['notes'] ?? '') . ' | Durasi: ' . $parsedDuration . ' jam';
+
+                $session['updated_at'] = now()->toIso8601String();
+                \Illuminate\Support\Facades\Cache::put(
+                    \App\Services\AI\ClarificationSessionManager::CACHE_PREFIX . $sessionId, $session,
+                    \App\Services\AI\ClarificationSessionManager::CACHE_TTL
+                );
+
+                $this->sendNextClarificationItem($session, $chatId);
+                return;
+            }
+
+            // Format durasi tidak valid  tanya lagi
+            $session['updated_at'] = now()->toIso8601String();
+            \Illuminate\Support\Facades\Cache::put(
+                \App\Services\AI\ClarificationSessionManager::CACHE_PREFIX . $sessionId, $session,
+                \App\Services\AI\ClarificationSessionManager::CACHE_TTL
+            );
+            $this->telegram->sendMessage($chatId,
+                "Format durasi tidak dikenali. Contoh: 2 (jam), 1.5, 30 (menit), atau 0 untuk lewati."
+            );
+            return;
+        }
+
+        // CEK: LEWATI
+        if (in_array($textLower, ['0', 'lewati', 'skip', 'none', 'tidak ada'])) {
+            $currentItem['status'] = 'skipped';
+            $currentItem['work_type'] = 'skipped';
+            $currentItem['notes'] = 'User memilih lewati';
+
+            $session['updated_at'] = now()->toIso8601String();
+            \Illuminate\Support\Facades\Cache::put(
+                \App\Services\AI\ClarificationSessionManager::CACHE_PREFIX . $sessionId, $session,
+                \App\Services\AI\ClarificationSessionManager::CACHE_TTL
+            );
+
+            $this->sendNextClarificationItem($session, $chatId);
+            return;
+        }
+
+        // CEK: ISI MANUAL (diawali # atau teks bebas > 3 kata yang bukan perintah)
+        $isManualInput = str_starts_with($text, '#')
+            || (str_word_count($text) >= 3
+                && !in_array($textLower, ['0', 'lewati', 'skip', 'none', 'tidak ada', 'area', 'lokasi', 'pekerjaan area', 'baru', 'new', 'equipment baru'])
+                && !preg_match('/^[A-H]$/', $text)
+                && !is_numeric($text));
+
+        if ($isManualInput) {
+            $manualText = ltrim($text, '# ');
+            $currentItem['status'] = 'resolved';
+            $currentItem['work_type'] = 'manual';
+            $currentItem['resolved_asset_id'] = null;
+            $currentItem['resolved_asset_code'] = 'MANUAL';
+            $currentItem['resolved_asset_description'] = $manualText;
+            $currentItem['notes'] = 'User input manual: ' . $manualText;
+
+            $session['updated_at'] = now()->toIso8601String();
+            \Illuminate\Support\Facades\Cache::put(
+                \App\Services\AI\ClarificationSessionManager::CACHE_PREFIX . $sessionId, $session,
+                \App\Services\AI\ClarificationSessionManager::CACHE_TTL
+            );
+
+            $this->telegram->sendMessage($chatId,
+                "Item " . ($targetIdx + 1) . "/" . $totalItems . " dicatat manual:\n" . $manualText
+            );
+
+            // Cek durasi
+            $this->sendNextClarificationItem($session, $chatId);
+            return;
+        }
+
+        // CEK: PILIH DARI OPSI (letter A, B, C...)
+        $selectedLetter = strtoupper($text);
+        $selectedAsset = null;
+
+        // Tentukan jumlah opsi equipment
+        $totalAssetOptions = count($possibleAssets);
+        $letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+
+        // Huruf untuk "Area" dan "Baru" tergantung jumlah opsi
+        $areaLetter = $letters[$totalAssetOptions] ?? 'Z';
+        $baruLetter = $letters[$totalAssetOptions + 1] ?? 'Y';
+
+        // ===== CEK: AREA =====
+        // User bisa memilih Area dengan:
+        // 1. Huruf yang sesuai (misal: jika 1 opsi equipment, Area = B)
+        // 2. Kata "area" langsung (area, lokasi)
+        // 3. Angka untuk opsi setelah equipment
+        if ($selectedLetter === $areaLetter || in_array($textLower, ['area', 'lokasi', 'pekerjaan area'])) {
+            $currentItem['status'] = 'resolved';
+            $currentItem['work_type'] = 'area';
+            $currentItem['notes'] = 'User mengkonfirmasi ini pekerjaan area';
+            $currentItem['resolved_asset_id'] = null;
+            $currentItem['resolved_asset_code'] = 'AREA';
+            $currentItem['resolved_asset_description'] = 'Pekerjaan Area';
+
+            $session['updated_at'] = now()->toIso8601String();
+            \Illuminate\Support\Facades\Cache::put(
+                \App\Services\AI\ClarificationSessionManager::CACHE_PREFIX . $sessionId, $session,
+                \App\Services\AI\ClarificationSessionManager::CACHE_TTL
+            );
+
+            $this->telegram->sendMessage($chatId,
+                "Item " . ($targetIdx + 1) . "/" . $totalItems . " dicatat sebagai PEKERJAAN AREA"
+            );
+
+            $this->sendNextClarificationItem($session, $chatId);
+            return;
+        }
+
+        // ===== CEK: EQUIPMENT BARU =====
+        // Jika tidak ada opsi equipment: B = Equipment Baru
+        // Jika ada opsi: huruf setelah Area = Equipment Baru
+        if ($selectedLetter === $baruLetter ||
+            ($totalAssetOptions === 0 && $selectedLetter === 'B') ||
+            in_array($textLower, ['baru', 'new', 'equipment baru'])) {
+            $currentItem['status'] = 'resolved';
+            $currentItem['work_type'] = 'new_equipment';
+            $currentItem['notes'] = 'User mengkonfirmasi ini equipment baru, perlu didaftarkan admin';
+            $currentItem['resolved_asset_code'] = 'NEW';
+            $currentItem['resolved_asset_description'] = 'Equipment Baru';
+
+            $session['updated_at'] = now()->toIso8601String();
+            \Illuminate\Support\Facades\Cache::put(
+                \App\Services\AI\ClarificationSessionManager::CACHE_PREFIX . $sessionId, $session,
+                \App\Services\AI\ClarificationSessionManager::CACHE_TTL
+            );
+
+            $this->telegram->sendMessage($chatId,
+                "Item " . ($targetIdx + 1) . "/" . $totalItems . " dicatat sebagai EQUIPMENT BARU (perlu didaftarkan admin)"
+            );
+
+            $this->sendNextClarificationItem($session, $chatId);
+            return;
+        }
+
+        // Cek huruf A-H untuk opsi equipment
+        if (preg_match('/^[A-H]$/', $selectedLetter)) {
+            $assetIndex = array_search($selectedLetter, $letters);
+            if ($assetIndex !== false && isset($possibleAssets[$assetIndex])) {
+                $selectedAsset = $possibleAssets[$assetIndex];
+            }
+        }
+
+        // Cek angka 1-8 untuk opsi equipment (alternatif)
+        if (is_numeric($text) && !$selectedAsset) {
+            $numIdx = (int)$text - 1;
+            if (isset($possibleAssets[$numIdx])) {
+                $selectedAsset = $possibleAssets[$numIdx];
+            }
+        }
+
+        if ($selectedAsset) {
+            $currentItem['status'] = 'resolved';
+            $currentItem['work_type'] = 'equipment';
+            $currentItem['resolved_asset_id'] = $selectedAsset['id'];
+            $currentItem['resolved_asset_code'] = $selectedAsset['tech_ident_no'] ?? '';
+            $currentItem['resolved_asset_description'] = $selectedAsset['description'] ?? '';
+            $currentItem['resolved_location'] = $selectedAsset['location'] ?? '';
+            $currentItem['notes'] = 'Dipilih user: ' . $selectedLetter;
+
+            // Learn alias
+            \App\Services\AI\ClarificationSessionManager::learnAlias(
+                $currentItem['raw_text'], $selectedAsset, $session['employee_id']
+            );
+
+            $session['updated_at'] = now()->toIso8601String();
+            \Illuminate\Support\Facades\Cache::put(
+                \App\Services\AI\ClarificationSessionManager::CACHE_PREFIX . $sessionId, $session,
+                \App\Services\AI\ClarificationSessionManager::CACHE_TTL
+            );
+
+            $this->telegram->sendMessage($chatId,
+                "Item " . ($targetIdx + 1) . "/" . $totalItems . " disimpan: " . $selectedAsset['tech_ident_no']
+            );
+
+            $this->sendNextClarificationItem($session, $chatId);
+            return;
+        }
+
+        // GAGAL MENGENALI INPUT
+        $currentItem['attempts'] = ($currentItem['attempts'] ?? 0) + 1;
+
+        if ($currentItem['attempts'] >= $currentItem['max_attempts']) {
+            $currentItem['status'] = 'unidentified';
+            $currentItem['work_type'] = 'unknown';
+            $currentItem['notes'] = 'Max attempts exceeded';
+
+            $session['updated_at'] = now()->toIso8601String();
+            \Illuminate\Support\Facades\Cache::put(
+                \App\Services\AI\ClarificationSessionManager::CACHE_PREFIX . $sessionId, $session,
+                \App\Services\AI\ClarificationSessionManager::CACHE_TTL
+            );
+
+            $this->telegram->sendMessage($chatId, "Percobaan habis, lanjut ke item berikutnya.");
+            $this->sendNextClarificationItem($session, $chatId);
+            return;
+        }
+
+        // Masih ada sisa percobaan
+        $session['updated_at'] = now()->toIso8601String();
+        \Illuminate\Support\Facades\Cache::put(
+            \App\Services\AI\ClarificationSessionManager::CACHE_PREFIX . $sessionId, $session,
+            \App\Services\AI\ClarificationSessionManager::CACHE_TTL
+        );
+
+        $attemptsLeft = $currentItem['max_attempts'] - $currentItem['attempts'];
+        $this->telegram->sendMessage($chatId,
+            "Pilihan tidak dikenali. Sisa percobaan: " . $attemptsLeft . "x.\n\n" .
+            "Ketik huruf (A, B, C...), <b>Area</b>, <b>0</b>, atau <b>#teks manual</b>."
+        );
+    }
     /**
-     * Finalisasi session — simpan semua report, kirim summary
+     * Finalisasi session  simpan semua report, kirim summary
      */
-    protected function finalizeSession(string $sessionId, array $session, string $chatId, Employee $employee, TelegramBotLog $log): void
+        protected function finalizeSession(string $sessionId, array $session, string $chatId, Employee $employee,
+TelegramBotLog $log): void
     {
         // Simpan semua report
-        $savedIds = \App\Services\AI\ClarificationSessionManager::saveAllReports($session);
+        $savedReports = \App\Services\AI\ClarificationSessionManager::saveAllReports($session);
 
-        if (!empty($savedIds)) {
-            $log->update(['maintenance_report_id' => $savedIds[0]]);
+        if (!empty($savedReports)) {
+            $log->update(['maintenance_report_id' => $savedReports[0]['id']]);
         }
 
-        // Build summary
+        // Build summary dengan ID report
         $summary = \App\Services\AI\ClarificationSessionManager::getSummary($session);
-        $summaryMsg = \App\Services\AI\ClarificationSessionManager::buildSummaryMessage($summary, $employee);
+        $summaryMsg = \App\Services\AI\ClarificationSessionManager::buildSummaryMessage($summary, $employee, $savedReports);
         $this->telegram->sendMessage($chatId, $summaryMsg);
 
         // Hapus session
@@ -1058,24 +1410,24 @@ class TelegramBotController extends Controller
         }
 
         // Kirim PESAN UTAMA
-        $response = "✅ <b>Laporan berhasil disimpan!</b>\n\n";
+        $response = "  <b>Laporan berhasil disimpan!</b>\n\n";
         $response .= "Shift: {$parsed['shift']}\n";
         $response .= "Tanggal: {$parsed['date']->format('d/m/Y')}\n";
-        $response .= "Teknisi: {$employee->name}\n\n";
+        $response .= "Teknisi: {$employee->name} ({$employee->department})\n\n";
 
         foreach ($reportIds as $i => $report) {
             $statusEmoji = match($report->status) {
-                'done' => '✅',
-                'continue' => '🔄',
-                'pending' => '⏳',
-                default => '📋',
+                'done' => ' DONE',
+                'continue' => 'CONTINUE',
+                'pending' => 'PENDING',
+                default => 'DEFAULT',
             };
 
-            $assetName = $report->asset ? $report->asset->tech_ident_no : '⚠️ (tidak dikenal)';
+            $assetName = $report->asset ? $report->asset->tech_ident_no : '  (tidak dikenal)';
             $suffix = '';
             if ($report->ai_suggested) {
                 $pct = round(($report->ai_confidence ?? 0) * 100);
-                $suffix = " 🤖{$pct}%";
+                $suffix = "  {$pct}%";
             }
             $response .= "{$statusEmoji} <b>{$report->telegram_report_id}</b>\n";
             $response .= "   └ {$report->action_taken}\n";
@@ -1084,24 +1436,24 @@ class TelegramBotController extends Controller
 
         $unknownCount = collect($reportIds)->filter(fn($r) => !$r->asset_id)->count();
         if ($unknownCount > 0) {
-            $response .= "\n⚠️ <b>{$unknownCount} alat tidak dikenal.</b> Silakan mapping manual di panel.";
+            $response .= "\n  <b>{$unknownCount} alat tidak dikenal.</b> Silakan mapping manual di panel.";
         }
 
         $this->telegram->sendMessage($chatId, $response);
 
-        // Kirim PESAN KEDUA — daftar ID
-        $copyText = "📸 <b>Kirim foto — salin ID di bawah:</b>\n\n";
+        // Kirim PESAN KEDUA  daftar ID
+        $copyText = "  <b>Kirim foto  salin ID di bawah:</b>\n\n";
         foreach ($reportIds as $report) {
             $copyText .= "<code>{$report->telegram_report_id}</code>\n";
         }
-        $copyText .= "\n📌 <b>Cara:</b> Reply pesan ini + attach foto.\n";
-        $copyText .= "Atau kirim foto dengan caption ID di atas ⬆️";
+        $copyText .= "\n <b>Cara:</b> Reply pesan ini + attach foto.\n";
+        $copyText .= "Atau kirim foto dengan caption ID di atas  ";
 
         $this->telegram->sendMessage($chatId, $copyText);
     }
 
     /**
-     * Handle foto dari user — hanya attach ke ID yang disebut di caption atau reply
+     * Handle foto dari user  hanya attach ke ID yang disebut di caption atau reply
      */
     protected function handlePhotoMessage(array $message, string $chatId, ?Employee $employee, TelegramBotLog $log): void
     {
@@ -1130,7 +1482,7 @@ class TelegramBotController extends Controller
         // PRIORITAS 2: Jika tidak ada ID di caption, ambil dari reply (hanya 1 ID pertama yang cocok)
         if (empty($reportIds) && $replyTo) {
             $replyText = $replyTo['text'] ?? $replyTo['caption'] ?? '';
-            // Cari ID yang sepertinya baru — ambil yang prefix-nya cocok dengan hari ini
+            // Cari ID yang sepertinya baru  ambil yang prefix-nya cocok dengan hari ini
             preg_match_all('/LMS-\d{8}-\d{3}/', $replyText, $replyMatches);
             $allIds = $replyMatches[0] ?? [];
 
@@ -1142,7 +1494,7 @@ class TelegramBotController extends Controller
 
         if (empty($reportIds)) {
             $this->telegram->sendMessage($chatId,
-                "⚠️ <b>ID laporan tidak ditemukan.</b>\n\n" .
+                "  <b>ID laporan tidak ditemukan.</b>\n\n" .
                 "Cara kirim foto:\n" .
                 "1. Copy ID laporan (contoh: <code>LMS-20260518-001</code>)\n" .
                 "2. Kirim foto dengan caption ID tersebut\n\n" .
@@ -1155,7 +1507,7 @@ class TelegramBotController extends Controller
         $photoPath = $this->photoHandler->handlePhoto($message, $chatId);
 
         if (!$photoPath) {
-            $this->telegram->sendMessage($chatId, "❌ Gagal mengunduh foto. Silakan coba lagi.");
+            $this->telegram->sendMessage($chatId, "  Gagal mengunduh foto. Silakan coba lagi.");
             return;
         }
 
@@ -1165,35 +1517,35 @@ class TelegramBotController extends Controller
             $report = MaintenanceReport::where('telegram_report_id', $rid)->first();
 
             if (!$report) {
-                $attachedTo[] = "❌ {$rid} tidak ditemukan";
+                $attachedTo[] = "  {$rid} tidak ditemukan";
                 continue;
             }
 
             // Validasi: hanya teknisi yang bersangkutan
             if ($employee && $report->employee_id !== $employee->id) {
-                $attachedTo[] = "⛔ {$rid} bukan laporan Anda";
+                $attachedTo[] = "  {$rid} bukan laporan Anda";
                 continue;
             }
 
             // Cek apakah foto ini sudah pernah di-attach (hindari duplikasi)
             $existingDocs = json_decode($report->documents ?? '[]', true);
             if (in_array($photoPath, $existingDocs)) {
-                $attachedTo[] = "⏭️ {$rid} — foto sudah ada";
+                $attachedTo[] = "  {$rid}  foto sudah ada";
                 continue;
             }
 
             // Attach foto ke laporan ini
             $this->photoHandler->attachPhotoToReport($report, $photoPath);
             $docCount = count(json_decode($report->fresh()->documents ?? '[]', true));
-            $attachedTo[] = "✅ {$rid} ({$docCount} file)";
+            $attachedTo[] = "  {$rid} ({$docCount} file)";
         }
 
         $this->telegram->sendMessage($chatId,
-            "✅ <b>Foto tersimpan!</b>\n\n" .
+            "  <b>Foto tersimpan!</b>\n\n" .
             implode("\n", $attachedTo)
         );
 
-        // Update log — simpan ID pertama yang berhasil
+        // Update log  simpan ID pertama yang berhasil
         $firstSuccessReportId = null;
         $firstSuccessNumericId = null;
         foreach ($reportIds as $rid) {
@@ -1207,7 +1559,7 @@ class TelegramBotController extends Controller
 
         $log->update([
             'maintenance_report_id' => $firstSuccessNumericId,
-            'incoming_message' => "📸 Foto untuk " . implode(', ', $reportIds),
+            'incoming_message' => "  Foto untuk " . implode(', ', $reportIds),
         ]);
     }
 
@@ -1226,7 +1578,7 @@ class TelegramBotController extends Controller
 
         if (!$employee) {
             $this->telegram->sendMessage($chatId,
-                "❌ <b>Nomor tidak terdaftar!</b>\n\n" .
+                "  <b>Nomor tidak terdaftar!</b>\n\n" .
                 "Nomor <code>{$phone}</code> tidak ditemukan di database.\n\n" .
                 "Silakan hubungi admin untuk mendaftarkan nomor Anda terlebih dahulu."
             );
@@ -1241,13 +1593,13 @@ class TelegramBotController extends Controller
                 // Auto-approve: pindahkan ke chat baru
                 $employee->update(['telegram_id' => $chatId]);
                 $this->telegram->sendMessage($chatId,
-                    "🔄 <b>Akun dipindahkan ke chat ini.</b>\n" .
+                    "  <b>Akun dipindahkan ke chat ini.</b>\n" .
                     "Selamat datang kembali, {$employee->name}!"
                 );
                 return;
             } else {
                 $this->telegram->sendMessage($chatId,
-                    "⚠️ <b>Akun ini sudah terdaftar di chat lain.</b>\n\n" .
+                    "  <b>Akun ini sudah terdaftar di chat lain.</b>\n\n" .
                     "Hubungi admin untuk memverifikasi ulang."
                 );
                 return;
@@ -1258,7 +1610,7 @@ class TelegramBotController extends Controller
         $employee->update(['telegram_id' => $chatId]);
 
         $this->telegram->sendMessage($chatId,
-            "✅ <b>Pendaftaran berhasil!</b>\n\n" .
+            "  <b>Pendaftaran berhasil!</b>\n\n" .
             "Nama: {$employee->name}\n" .
             "NIK: {$employee->nik}\n" .
             "Departemen: {$employee->department}\n" .
@@ -1280,7 +1632,7 @@ class TelegramBotController extends Controller
 
         if (empty($args)) {
             $this->telegram->sendMessage($chatId,
-                "📋 <b>Cek Status Laporan</b>\n\n" .
+                "  <b>Cek Status Laporan</b>\n\n" .
                 "Gunakan: <code>/status LMS-20260517-001</code>\n\n" .
                 "Contoh: /status LMS-20260517-001"
             );
@@ -1294,19 +1646,19 @@ class TelegramBotController extends Controller
 
         if (!$report) {
             $this->telegram->sendMessage($chatId,
-                "❌ Laporan dengan ID <b>{$args}</b> tidak ditemukan."
+                "  Laporan dengan ID <b>{$args}</b> tidak ditemukan."
             );
             return;
         }
 
         $statusEmoji = match($report->status) {
-            'done' => '✅',
-            'continue' => '🔄',
-            'pending' => '⏳',
-            default => '📋',
+            'done' => ' ',
+            'continue' => ' ',
+            'pending' => ' ',
+            default => ' ',
         };
 
-        $response = "📋 <b>Detail Laporan</b>\n\n";
+        $response = "  <b>Detail Laporan</b>\n\n";
         $response .= "ID: {$report->telegram_report_id}\n";
         $response .= "Tanggal: {$report->report_date->format('d/m/Y')}\n";
         $response .= "Shift: {$report->shift}\n";
@@ -1330,19 +1682,19 @@ class TelegramBotController extends Controller
     protected function sendWelcome(string $chatId): void
     {
         $this->telegram->sendMessage($chatId,
-            "🤖 <b>Selamat datang di Bot Laporan Maintenance!</b>\n\n" .
+            "  <b>Selamat datang di Bot Laporan Maintenance!</b>\n\n" .
             "Bot ini digunakan untuk mencatat laporan perbaikan harian.\n\n" .
-            "📋 <b>Format laporan:</b>\n" .
+            "  <b>Format laporan:</b>\n" .
             "<code>Report shift 1\n" .
             "17/05/2026\n" .
             "1. Aksi perbaikan - done\n" .
             "2. Aksi lain (continue)</code>\n\n" .
-            "📸 <b>Kirim foto:</b>\n" .
+            "  <b>Kirim foto:</b>\n" .
             "Reply pesan bot dengan ID laporan + foto.\n\n" .
-            "🔹 /register — Daftarkan akun Anda\n" .
-            "🔹 /status [ID] — Cek status laporan\n" .
-            "🔹 /me — Lihat profil Anda\n" .
-            "🔹 /help — Bantuan lengkap\n\n" .
+            "🔹 /register  Daftarkan akun Anda\n" .
+            "🔹 /status [ID]  Cek status laporan\n" .
+            "🔹 /me  Lihat profil Anda\n" .
+            "🔹 /help  Bantuan lengkap\n\n" .
             "📞 Hubungi admin jika ada kendala."
         );
     }
@@ -1353,7 +1705,7 @@ class TelegramBotController extends Controller
     protected function sendHelp(string $chatId): void
     {
         $this->telegram->sendMessage($chatId,
-            "📚 <b>Panduan Penggunaan Bot</b>\n\n" .
+            "  <b>Panduan Penggunaan Bot</b>\n\n" .
             "<b>1. Daftar Akun</b>\n" .
             "Ketik /register, lalu kirim nomor HP yang terdaftar.\n\n" .
             "<b>2. Laporan Harian</b>\n" .

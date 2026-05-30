@@ -7,6 +7,7 @@ use App\Models\Asset;
 use App\Models\AssetAlias;
 use App\Models\Employee;
 use App\Models\MaintenanceReport;
+use App\Models\AiAliasAuditLog;
 use App\Services\AI\AiGatewayService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -67,7 +68,34 @@ class MaintenanceReportController extends Controller
                 });
             });
 
-        return view('report-manager', compact('reports', 'allAssets', 'reportsPaginated'));
+        // Ambil audit logs untuk AI (digunakan di popup)
+        $reportAuditLogs = AiAliasAuditLog::with(['asset', 'employee'])
+            ->latest()
+            ->take(100)
+            ->get();
+
+        // Format untuk JavaScript
+        $reportAuditJson = $reportAuditLogs->map(function($log) {
+            return [
+                'alias' => $log->alias,
+                'asset_code' => $log->asset_code,
+                'asset_description' => $log->asset_description,
+                'original_text' => $log->original_text,
+                'keywords_used' => $log->keywords_used ?: [],
+                'area_detected' => $log->area_detected,
+                'area_asset' => $log->area_asset,
+                'ai_possible_assets' => $log->ai_possible_assets ?: [],
+                'ai_reasoning' => $log->ai_reasoning,
+                'confidence_score' => $log->confidence_score,
+                'area_match' => $log->area_match,
+                'action_taken' => $log->action_taken,
+                'employee_name' => optional($log->employee)->name ?? '-',
+                'telegram_username' => $log->telegram_username,
+                'occurred_at' => $log->occurred_at ? $log->occurred_at->format('d/m/Y H:i:s') : '-',
+            ];
+        });
+
+        return view('report-manager', compact('reports', 'allAssets', 'reportsPaginated', 'reportAuditJson'));
     }
 
     /**

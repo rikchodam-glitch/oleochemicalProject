@@ -108,6 +108,29 @@ class AiGatewayService
         $data['fallback_chain'] = $result['fallback_chain'];
         $data['processing_time_ms'] = $result['processing_time_ms'];
 
+        // Pastikan setiap item punya field is_area_work (default false)
+        if (isset($data['items']) && is_array($data['items'])) {
+            foreach ($data['items'] as &$item) {
+                $item['is_area_work'] = $item['is_area_work'] ?? false;
+            }
+        }
+
+        // Fallback: jika AI return empty possible_assets dan is_area_work false,
+        // generate possible_assets dari keyword di database
+        if (isset($data['items']) && is_array($data['items'])) {
+            foreach ($data['items'] as &$item) {
+                $possibleAssets = $item['possible_assets'] ?? [];
+                $isAreaWork = $item['is_area_work'] ?? false;
+
+                if (empty($possibleAssets) && !$isAreaWork && ($item['confidence'] ?? 0) < 0.8) {
+                    $item['possible_assets'] = $this->fallbackSearchAssets(
+                        $item['original_text'] ?? $item['action_clean'] ?? ''
+                    );
+                    $item['notes'] = ($item['notes'] ?? '') . ' | Fallback: AI tidak memberikan opsi, dicari dari database';
+                }
+            }
+        }
+
         return $data;
     }
 
@@ -117,34 +140,102 @@ class AiGatewayService
      */
     protected function buildClarificationPrompt(?Employee $employee, string $userText = ''): string
     {
-        // Filter asset berdasarkan kata kunci dari userText
         $keywords = $this->extractKeywords($userText);
-        $query = Asset::select('id', 'tech_ident_no', 'equipment_no', 'description')
-            ->with(['company:id,name', 'department:id,name', 'area:id,name', 'subArea:id,name']);
 
-        if (!empty($keywords)) {
-            $query->where(function($q) use ($keywords) {
-                foreach ($keywords as $kw) {
-                    $q->orWhere('description', 'like', '%' . $kw . '%');
-                    $q->orWhere('tech_ident_no', 'like', '%' . $kw . '%');
-                    $q->orWhere('equipment_no', 'like', '%' . $kw . '%');
-                }
-            });
+        // === EKSTRAK KODE AREA (RG1, BD1, BD2, EPE, CES, TF1, TF2) ===
+        $areaCodes = [];
+        preg_match_all('/(?<![A-Za-z0-9])(RG[1-9]|BD[1-9]|EPE|CES|TF[1-9])(?![A-Za-z0-9])/i', $userText, $areaMatches);
+        foreach ($areaMatches[0] as $ac) {
+            $areaCodes[] = strtoupper($ac);
         }
 
-        $allAssets = $query->limit(30)->get();
+        // === CARI ASSET: PRIORITAS AREA DULU ===
+        $areaAssets = collect();
+        $keywordAssets = collect();
 
-        if ($allAssets->isEmpty()) {
-            $allAssets = Asset::select('id', 'tech_ident_no', 'equipment_no', 'description')
+        if (!empty($areaCodes)) {
+            // 1. Cari asset yang areanya cocok dengan kode area
+            $areaAssets = Asset::select('id', 'tech_ident_no', 'equipment_no', 'description')
+                ->with(['company:id,name', 'department:id,name', 'area:id,name', 'subArea:id,name'])
+                ->where(function($q) use ($areaCodes) {
+                    foreach ($areaCodes as $ac) {
+                        $q->orWhereHas('area', fn($sq) => $sq->where('name', $ac))
+                          ->orWhereHas('subArea', fn($sq) => $sq->where('name', $ac));
+                    }
+                })
+                // Juga filter dengan keyword jika ada
+                ->when(!empty($keywords), function($q) use ($keywords) {
+                    $q->where(function($sub) use ($keywords) {
+                        foreach ($keywords as $kw) {
+                            $sub->orWhere('description', 'like', '%' . $kw . '%')
+                                ->orWhere('tech_ident_no', 'like', '%' . $kw . '%')
+                                ->orWhere('equipment_no', 'like', '%' . $kw . '%');
+                        }
+                    });
+                })
+                ->limit(20)
+                ->get();
+        }
+
+        // 2. Cari berdasarkan keyword (tanpa filter area) sebagai pelengkap
+        if (!empty($keywords)) {
+            $keywordQuery = Asset::select('id', 'tech_ident_no', 'equipment_no', 'description')
+                ->with(['company:id,name', 'department:id,name', 'area:id,name', 'subArea:id,name'])
+                ->where(function($q) use ($keywords) {
+                    foreach ($keywords as $kw) {
+                        $q->orWhere('description', 'like', '%' . $kw . '%')
+                          ->orWhere('tech_ident_no', 'like', '%' . $kw . '%')
+                          ->orWhere('equipment_no', 'like', '%' . $kw . '%');
+                    }
+                })
+                ->limit(20)
+                ->get();
+
+            // Gabungkan, tanpa duplikasi
+            $existingIds = $areaAssets->pluck('id')->toArray();
+            foreach ($keywordQuery as $asset) {
+                if (!in_array($asset->id, $existingIds)) {
+                    $keywordAssets->push($asset);
+                }
+            }
+        }
+
+        // 3. Fallback jika semua kosong
+        if ($areaAssets->isEmpty() && $keywordAssets->isEmpty()) {
+            $keywordAssets = Asset::select('id', 'tech_ident_no', 'equipment_no', 'description')
                 ->with(['company:id,name', 'department:id,name', 'area:id,name', 'subArea:id,name'])
                 ->limit(20)
                 ->get();
         }
 
+        // === BANGUN KONTEKS ASSET DENGAN LABEL PRIORITAS ===
         $contextParts = [];
-        $grouped = $allAssets->groupBy(function($a) { return $a->company->name ?? 'Unknown'; });
-        foreach ($grouped as $companyName => $companyAssets) {
-            $items = $companyAssets->map(function($a) {
+        $allAssetIds = [];
+
+        // Kelompokkan asset berdasarkan area
+        $groupedByArea = $areaAssets->groupBy(function($a) {
+            return $a->area->name ?? 'Tanpa Area';
+        });
+
+        foreach ($groupedByArea as $areaName => $groupAssets) {
+            $items = $groupAssets->map(function($a) use (&$allAssetIds) {
+                $locParts = [];
+                if ($a->department) $locParts[] = $a->department->name;
+                if ($a->area) $locParts[] = $a->area->name;
+                if ($a->subArea) $locParts[] = $a->subArea->name;
+                $loc = implode(' - ', $locParts);
+                $allAssetIds[] = $a->id;
+                return '  [' . $a->id . '] ' . $a->tech_ident_no . ' - ' . $a->description . ($loc ? ' (' . $loc . ')' : '');
+            })->implode("\n");
+            $areaLabel = in_array(strtoupper($areaName), $areaCodes) ? "[AREA DIMAKSUD] {$areaName}" : "Area {$areaName}";
+            $contextParts[] = '=== ' . $areaLabel . " ===\n" . $items;
+        }
+
+        // Tambahkan keyword-based assets (dari area berbeda)
+        if ($keywordAssets->isNotEmpty()) {
+            $keywordItems = $keywordAssets->filter(function($a) use (&$allAssetIds) {
+                return !in_array($a->id, $allAssetIds);
+            })->map(function($a) {
                 $locParts = [];
                 if ($a->department) $locParts[] = $a->department->name;
                 if ($a->area) $locParts[] = $a->area->name;
@@ -152,33 +243,55 @@ class AiGatewayService
                 $loc = implode(' - ', $locParts);
                 return '  [' . $a->id . '] ' . $a->tech_ident_no . ' - ' . $a->description . ($loc ? ' (' . $loc . ')' : '');
             })->implode("\n");
-            $contextParts[] = '=== ' . $companyName . " ===\n" . $items;
+
+            if (!empty(trim($keywordItems))) {
+                $contextParts[] = "=== AREA LAIN (keyword mirip) ===\n" . $keywordItems;
+            }
         }
+
         $assetContext = implode("\n\n", $contextParts);
 
         $prompt = 'Anda adalah asisten pintar untuk sistem laporan maintenance pabrik oleochemical.' . "\n\n";
-        $prompt .= 'Tugas Anda: Menerima teks laporan yang berisi BEBERAPA item maintenance,' . "\n";
-        $prompt .= 'lalu untuk SETIAP item, cari equipment yang PALING COCOK di database.' . "\n\n";
+        $prompt .= 'Tugas Anda: Menerima teks laporan maintenance, lalu cari equipment yang PALING COCOK di database.' . "\n\n";
         $prompt .= "DATABASE ASSET:\n" . $assetContext . "\n\n";
-        $prompt .= 'INSTRUKSI KETAT:' . "\n";
-        $prompt .= '1. Baca teks laporan dengan saksama, identifikasi setiap item' . "\n";
-        $prompt .= '2. Untuk SETIAP ITEM: cari equipment di database yang JENISNYA SAMA:' . "\n";
-        $prompt .= '   - lampu, TL, LED, penerangan, lighting -> cari kata lampu, TL' . "\n";
-        $prompt .= '   - pompa, pump, pumping -> cari pump, pompa' . "\n";
-        $prompt .= '   - fan, kipas, blower, exhaust -> cari fan, blower' . "\n";
-        $prompt .= '   - AC, air conditioner, pendingin, cooling -> cari AC' . "\n";
-        $prompt .= '   - motor, bearing, bearing motor -> cari motor, bearing' . "\n";
-        $prompt .= '   - komputer, PC, printer, monitor -> cari IT equipment' . "\n";
-        $prompt .= '   - valve, vessel, tangki, tank -> equipment proses' . "\n";
-        $prompt .= '3. Jika JENIS equipment tidak sama, jangan dimasukkan ke possible_assets' . "\n";
-        $prompt .= "   CONTOH: teks bilang 'lampu', jangan masukkan 'AC' meskipun lokasinya Lab" . "\n";
-        $prompt .= "   CONTOH: teks bilang 'pompa', jangan masukkan 'fan'" . "\n";
-        $prompt .= "   CONTOH: teks bilang 'bearing motor', jangan masukkan 'AC'" . "\n";
-        $prompt .= '4. Hitung confidence per item: 0.0-1.0' . "\n";
-        $prompt .= '   - >= 0.8: isi suggested_asset_id (numeric) dan suggested_tech_ident_no' . "\n";
-        $prompt .= '   - 0.5-0.79: isi possible_assets dengan opsi-opsi' . "\n";
-        $prompt .= '   - < 0.5: possible_assets = []' . "\n";
-        $prompt .= '5. JIKA TIDAK ADA KATA KUNCI YANG COCOK, possible_assets = []' . "\n\n";
+
+        // === FEEDBACK: mapping yang pernah ditolak admin ===
+        $rejectedAliases = \Illuminate\Support\Facades\Cache::get('ai_feedback_rejected_aliases', []);
+        $relevantRejections = [];
+        foreach ($rejectedAliases as $ra) {
+            foreach ($keywords as $kw) {
+                if (stripos($ra['alias'], $kw) !== false || stripos($kw, $ra['alias']) !== false) {
+                    $relevantRejections[] = $ra;
+                    break;
+                }
+            }
+        }
+        if (!empty($relevantRejections)) {
+            $prompt .= "PERINGATAN — mapping berikut PERNAH DITOLAK ADMIN, JANGAN GUN A KAN:\n";
+            foreach ($relevantRejections as $rr) {
+                $prompt .= "- JANGAN mapping \"{$rr['alias']}\" ke {$rr['wrong_asset_code']} karena: {$rr['reason']}\n";
+            }
+            $prompt .= "\n";
+        }
+
+        $prompt .= 'INSTRUKSI UTAMA — PRIORITAS LOKASI:' . "\n";
+        $prompt .= '1. User menyebut area/lokasi: ' . (implode(', ', $areaCodes) ?: 'tidak ada') . "\n";
+        if (!empty($areaCodes)) {
+            $prompt .= '2. PRIORITASKAN asset dari bagian "[AREA DIMAKSUD]" karena lokasinya cocok dengan yang disebut user' . "\n";
+            $prompt .= '3. Asset dari "AREA LAIN" adalah area berbeda — beri confidence RENDAH (< 0.4) kecuali sangat cocok' . "\n";
+            $prompt .= '4. Jika ada asset dari AREA DIMAKSUD yang cocok jenisnya, gunakan itu sebagai opsi utama (confidence tinggi)' . "\n";
+        } else {
+            $prompt .= '2. Karena tidak ada area disebut, cari berdasarkan jenis equipment (pompa, motor, AC, dll)' . "\n";
+        }
+        $prompt .= '5. Hitung confidence untuk setiap item (0.0-1.0):' . "\n";
+        $prompt .= '   - >= 0.8: isi suggested_asset_id + suggested_tech_ident_no' . "\n";
+        $prompt .= '   - < 0.8: isi possible_assets dengan opsi-opsi (min 1, maks 5)' . "\n";
+        $prompt .= '6. SETIAP item WAJIB punya possible_assets (min 1 opsi), jangan kosongkan' . "\n";
+        $prompt .= '7. PEKERJAAN AREA: Jika teks menyebut pekerjaan bangunan/lokasi (lantai, dinding,' . "\n";
+        $prompt .= '   atap, saluran, taman, pagar, plafon, cat, kaca, pintu, jendela) dan TIDAK ADA' . "\n";
+        $prompt .= '   kaitannya dengan equipment spesifik, set is_area_work = true' . "\n";
+        $prompt .= '   dan kosongkan possible_assets (array kosong []).' . "\n";
+        $prompt .= '   Contoh: "Ganti lantai Lab EPE", "Pengecatan dinding gudang" -> is_area_work = true' . "\n\n";
         $prompt .= "FORMAT OUTPUT (JSON WAJIB):\n";
         $prompt .= "{\n";
         $prompt .= '  "items": [' . "\n";
@@ -188,6 +301,7 @@ class AiGatewayService
         $prompt .= '      "confidence": 0.65,' . "\n";
         $prompt .= '      "suggested_asset_id": null,' . "\n";
         $prompt .= '      "suggested_tech_ident_no": null,' . "\n";
+        $prompt .= '      "is_area_work": false,' . "\n";
         $prompt .= '      "possible_assets": [' . "\n";
         $prompt .= '        {' . "\n";
         $prompt .= '          "id": 15,' . "\n";
@@ -204,9 +318,9 @@ class AiGatewayService
         $prompt .= '  "summary": "ringkasan analisis"' . "\n";
         $prompt .= '}' . "\n\n";
         $prompt .= 'ATURAN PENTING:' . "\n";
-        $prompt .= '- items adalah ARRAY, jumlahnya sesuai dengan jumlah item laporan' . "\n";
-        $prompt .= '- suggested_asset_id HARUS numeric (integer), null jika tidak yakin' . "\n";
-        $prompt .= '- possible_assets maksimal 5 opsi per item, urut dari confidence tertinggi' . "\n";
+        $prompt .= '- items adalah ARRAY, jumlahnya sesuai item laporan' . "\n";
+        $prompt .= '- possible_assets WAJIB minimal 1 opsi per item, KECUALI is_area_work = true' . "\n";
+        $prompt .= '- is_area_work: true jika ini pekerjaan area/lokasi tanpa equipment spesifik' . "\n";
         $prompt .= '- Output HANYA JSON, tidak ada teks lain';
 
         return $prompt;
@@ -216,25 +330,35 @@ class AiGatewayService
      * Ekstrak kata kunci dari teks laporan
      */
     protected function extractKeywords(string $text): array
-    {
-        // Hapus angka, tanda baca
-        $clean = preg_replace('/[0-9]+/', '', $text);
-        $clean = preg_replace('/[^a-zA-Z\s]/', ' ', $clean);
+{
+    $keywords = [];
 
-        // Split jadi kata
-        $words = preg_split('/\s+/', strtolower(trim($clean)));
-        $words = array_filter($words, function($w) { return strlen($w) > 2; });
-
-        // Stop words
-        $stopWords = ['dan', 'atau', 'yang', 'di', 'ke', 'dari', 'dengan', 'untuk', 'pada',
-                       'ini', 'itu', 'saya', 'kami', 'perbaiki', 'ganti', 'cek', 'done',
-                       'report', 'shift', 'item', 'lab', 'epe', 'pt', 'qc', 'bd', 'produksi',
-                       'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'any',
-                       'can', 'had', 'her', 'was', 'one', 'our', 'out', 'has', 'have', 'been'];
-        $keywords = array_diff($words, $stopWords);
-
-        return array_values($keywords);
+    // Cari kata yang mengandung angka (kode equipment seperti 6163P14, BD1)
+    preg_match_all('/[A-Za-z]+[\d]+[A-Za-z0-9\-]*/', $text, $codeMatches);
+    foreach ($codeMatches[0] as $code) {
+        $keywords[] = strtolower($code);
     }
+
+    // Cari kata huruf >= 3 karakter
+    preg_match_all('/[A-Za-z]{3,}/', $text, $wordMatches);
+    foreach ($wordMatches[0] as $w) {
+        $keywords[] = strtolower($w);
+    }
+
+    // Stop words (hanya kata umum, tanpa istilah teknis)
+    $stopWords = ['dan', 'atau', 'yang', 'di', 'ke', 'dari', 'dengan', 'untuk', 'pada',
+                   'ini', 'itu', 'saya', 'kami', 'the', 'and', 'for', 'are', 'but', 'not',
+                   'you', 'all', 'any', 'can', 'had', 'her', 'was', 'one', 'our', 'out',
+                   'has', 'have', 'been'];
+
+    $keywords = array_unique(array_diff($keywords, $stopWords));
+
+    // Prioritas: kode equipment (mengandung angka) di depan
+    $codes = array_filter($keywords, fn($k) => preg_match('/\d/', $k));
+    $words = array_filter($keywords, fn($k) => !preg_match('/\d/', $k));
+
+    return array_values(array_merge($codes, $words));
+}
 
     /**
      * Kirim prompt ke AI dengan fallback chain
@@ -742,6 +866,49 @@ PROMPT;
     }
 
     /**
+     * Fallback search: jika AI tidak memberikan possible_assets,
+     * cari equipment dari database berdasarkan keyword
+     */
+    protected function fallbackSearchAssets(string $text): array
+    {
+        $keywords = $this->extractKeywords($text);
+        $results = [];
+
+        if (empty($keywords)) {
+            return $results;
+        }
+
+        $assets = Asset::select('id', 'tech_ident_no', 'equipment_no', 'description')
+            ->with(['company:id,name', 'department:id,name', 'area:id,name', 'subArea:id,name'])
+            ->where(function($q) use ($keywords) {
+                foreach ($keywords as $kw) {
+                    $q->orWhere('description', 'like', '%' . $kw . '%');
+                    $q->orWhere('tech_ident_no', 'like', '%' . $kw . '%');
+                }
+            })
+            ->limit(5)
+            ->get();
+
+        foreach ($assets as $asset) {
+            $locParts = [];
+            if ($asset->department) $locParts[] = $asset->department->name;
+            if ($asset->area) $locParts[] = $asset->area->name;
+            if ($asset->subArea) $locParts[] = $asset->subArea->name;
+            $loc = implode(' - ', $locParts);
+
+            $results[] = [
+                'id' => $asset->id,
+                'tech_ident_no' => $asset->tech_ident_no ?? '',
+                'description' => $asset->description ?? '',
+                'location' => $loc,
+                'confidence' => 0.5,
+            ];
+        }
+
+        return $results;
+    }
+
+    /**
      * Test koneksi ke satu provider
      */
     public function testProvider(int $providerId): array
@@ -821,5 +988,53 @@ PROMPT;
                     'has_quota' => $provider->hasAvailableQuota(),
                 ];
             })->toArray();
+    }
+
+    /**
+     * Kirim feedback rejection dari admin ke AI untuk pembelajaran.
+     * Menyimpan feedback ke database log untuk referensi di masa depan.
+     */
+    public function sendFeedback(array $feedback): void
+    {
+        try {
+            // Simpan ke database log AI untuk tracking
+            $this->logUsage([
+                'ai_provider_id' => null,
+                'telegram_bot_log_id' => null,
+                'status' => 'feedback',
+                'error_message' => json_encode($feedback),
+                'prompt_tokens' => 0,
+                'completion_tokens' => 0,
+                'total_tokens' => 0,
+                'estimated_cost' => 0,
+            ]);
+
+            // Untuk feedback alias rejection, kita simpan sebagai catatan
+            // yang nantinya bisa dibaca oleh AI saat buildClarificationPrompt
+            if (($feedback['type'] ?? '') === 'alias_rejected') {
+                $alias = $feedback['alias'] ?? '';
+                $reason = $feedback['reason'] ?? '';
+                $wrongCode = $feedback['wrong_asset_code'] ?? '';
+
+                Log::info("AI FEEDBACK: Alias '{$alias}' -> {$wrongCode} DITOLAK. Alasan: {$reason}");
+
+                // Cache feedback ini agar bisa dibaca oleh prompt AI
+                $cacheKey = 'ai_feedback_rejected_aliases';
+                $rejectedAliases = \Illuminate\Support\Facades\Cache::get($cacheKey, []);
+                $rejectedAliases[$alias] = [
+                    'alias' => $alias,
+                    'wrong_asset_code' => $wrongCode,
+                    'reason' => $reason,
+                    'rejected_at' => $feedback['rejected_at'] ?? now()->toIso8601String(),
+                ];
+                // Simpan max 100 feedback terakhir
+                if (count($rejectedAliases) > 100) {
+                    array_shift($rejectedAliases);
+                }
+                \Illuminate\Support\Facades\Cache::forever($cacheKey, $rejectedAliases);
+            }
+        } catch (\Throwable $e) {
+            Log::warning("Gagal menyimpan feedback AI: {$e->getMessage()}");
+        }
     }
 }
